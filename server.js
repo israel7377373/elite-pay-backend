@@ -19,13 +19,18 @@ app.use(cors({
 
 app.use(bodyParser.json());
 
-// --- DADOS MOCK (Login Simples) ---
+// --- BANCO DE DADOS MOCK (Tudo em memória) ---
 const db = {
     users: [
         { id: 1, email: 'admin@pay.com', password: 'admin', status: 'ATIVO', name: 'Administrador', role: 'admin', saldoCents: 0 },
         { id: 2, email: 'cliente@pay.com', password: '123', status: 'ATIVO', name: 'Cliente Teste', role: 'user', saldoCents: 5000 }
     ],
-    transactions: [] 
+    transactions: [],
+    // 👇 AQUI ESTAVA FALTANDO: Onde guardamos as credenciais
+    credentials: {
+        // Exemplo: '2': { hasCredentials: true, clientId: '...', clientSecret: '...' }
+    },
+    allowedIps: []
 };
 
 // --- MIDDLEWARE DE AUTENTICAÇÃO ---
@@ -60,61 +65,86 @@ app.use('/api/auth', authRoutes);
 // --- ROTAS DE TRANSAÇÃO ---
 const txRoutes = express.Router();
 
-// 1. CRIAR DEPÓSITO (CORRIGIDO: REMOVIDO O SPLIT)
+// 1. CRIAR DEPÓSITO (Conecta na MisticPay)
 txRoutes.post('/create', checkAuth, async (req, res) => {
     const { amount, description } = req.body;
-
     console.log(`🔄 [Backend] Gerando PIX de R$ ${amount}...`);
 
     try {
-        const payload = {
-            amount: Number(amount),
-            description: description || 'Depósito via Elite Pay',
-            payerName: "Cliente Teste", 
-            payerDocument: "000.000.000-00",
-            transactionId: `tx_${Date.now()}`
-            // REMOVIDO: splitTax: "0" -> ISSO CAUSAVA O ERRO!
-        };
-
         const misticResponse = await fetch(`${MISTIC_URL}/api/transactions/create`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'ci': MISTIC_CI,
-                'cs': MISTIC_CS
-            },
-            body: JSON.stringify(payload)
+            headers: { 'Content-Type': 'application/json', 'ci': MISTIC_CI, 'cs': MISTIC_CS },
+            body: JSON.stringify({
+                amount: Number(amount),
+                description: description || 'Depósito Elite Pay',
+                payerName: "Cliente Teste", 
+                payerDocument: "000.000.000-00",
+                transactionId: `tx_${Date.now()}`
+                // splitTax removido para não dar erro
+            })
         });
 
         const data = await misticResponse.json();
+        if (!misticResponse.ok) return res.status(400).json({ error: data.message || 'Erro na MisticPay' });
 
-        if (!misticResponse.ok) {
-            console.error('❌ Erro MisticPay:', data);
-            return res.status(400).json({ error: data.message || 'Erro na MisticPay' });
-        }
-
-        console.log('✅ QR Code gerado com sucesso!');
-        
         db.transactions.push({ ...data, created_at: new Date() });
         res.json(data);
 
     } catch (error) {
-        console.error('❌ Erro de conexão:', error);
-        res.status(500).json({ error: 'Falha ao conectar com provedor de pagamento' });
+        console.error('❌ Erro:', error);
+        res.status(500).json({ error: 'Erro ao conectar API' });
     }
 });
 
-// 2. Listar Transações
-txRoutes.get('/', checkAuth, (req, res) => {
-    res.json({ success: true, transactions: db.transactions });
-});
-
-// 3. Saque
-txRoutes.post('/withdraw', checkAuth, (req, res) => {
-    res.json({ success: true, message: 'Saque solicitado' });
-});
+txRoutes.get('/', checkAuth, (req, res) => res.json({ success: true, transactions: db.transactions }));
+txRoutes.post('/withdraw', checkAuth, (req, res) => res.json({ success: true, message: 'Saque solicitado' }));
 
 app.use('/api/transactions', txRoutes);
+
+// --- ROTAS DE CREDENCIAIS (AS QUE FALTAVAM!) ---
+const credRoutes = express.Router();
+
+// Buscar Credenciais
+credRoutes.get('/', checkAuth, (req, res) => {
+    // Retorna as credenciais do usuário 2 (Cliente Teste) ou vazio
+    const creds = db.credentials['2'] || { hasCredentials: false };
+    res.json(creds);
+});
+
+// Gerar Novas Credenciais
+credRoutes.post('/generate', checkAuth, (req, res) => {
+    const newCreds = {
+        hasCredentials: true,
+        clientId: 'live_' + Math.random().toString(36).substr(2, 16),
+        clientSecret: 'sk_' + Math.random().toString(36).substr(2, 32),
+        createdAt: new Date()
+    };
+    // Salva para o usuário 2
+    db.credentials['2'] = newCreds;
+    
+    console.log('🔑 Credenciais geradas:', newCreds.clientId);
+    res.json(newCreds);
+});
+
+// Deletar Credenciais
+credRoutes.delete('/', checkAuth, (req, res) => {
+    delete db.credentials['2'];
+    res.json({ success: true });
+});
+
+// IPs
+credRoutes.get('/ips', checkAuth, (req, res) => res.json({ ips: db.allowedIps }));
+credRoutes.post('/ips', checkAuth, (req, res) => {
+    const newIp = { id: Math.random(), ip: req.body.ip, criado_em: new Date() };
+    db.allowedIps.push(newIp);
+    res.json(newIp);
+});
+credRoutes.delete('/ips/:id', checkAuth, (req, res) => {
+    db.allowedIps = db.allowedIps.filter(i => i.id != req.params.id);
+    res.json({ success: true });
+});
+
+app.use('/api/credentials', credRoutes);
 
 // --- ROTAS DO ADMIN ---
 app.get('/api/users', (req, res) => res.json(db.users));
@@ -126,5 +156,5 @@ app.put('/api/users/:id/status', (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`✅ Servidor Rodando na porta ${PORT}`);
+    console.log(`✅ SERVIDOR COMPLETO RODANDO NA PORTA ${PORT}`);
 });
