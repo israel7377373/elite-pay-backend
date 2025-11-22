@@ -26,13 +26,6 @@ app.use(bodyParser.json());
 // 🛠️ FUNÇÕES AUXILIARES
 // ==========================================
 
-// 1. Pegar IP Real
-function getIp(req) {
-    if (SIMULAR_HACKER) return '192.168.55.99';
-    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    return (ip === '::1') ? '127.0.0.1' : ip;
-}
-
 // 2. Formatar Transação (ESSENCIAL PARA A TABELA FICAR BONITA)
 // Transforma dados da Mistic ou Mock no formato padrão que o site espera
 const formatarTransacao = (dados, tipo, usuario, ip, descricaoExtra) => {
@@ -280,4 +273,5 @@ app.listen(PORT, () => {
     console.log(`✅ SERVIDOR COMPLETO RODANDO NA PORTA ${PORT}`);
     console.log(`🔒 Proteção Admin IP: ATIVADA`);
 });
+
 
