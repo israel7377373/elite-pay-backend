@@ -2,272 +2,320 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
+const jwt = require('jsonwebtoken'); // Adiciona JWT de volta se você quiser usá-lo depois
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
 // ==========================================
-// 🔐 CREDENCIAIS E SEGURANÇA (IP FIXO)
+// 🔐 CONFIGURAÇÕES DE INTEGRAÇÃO (MISTICPAY)
 // ==========================================
+// ⚠️ ATENÇÃO: As credenciais vêm do .env. Se não existirem, usamos os valores fixos de DEV.
 const MISTIC_CI = process.env.CI || 'ci_jbbmajuwwmq28hv';
 const MISTIC_CS = process.env.CS || 'cs_isxps89xg5jodulumlayuy40d';
 const MISTIC_URL = 'https://api.misticpay.com'; 
 
 const ADMIN_EMAIL = 'admin@pay.com';
 const ADMIN_PASS = 'admin';
+const IP_SEGURO_ADMIN = process.env.ADMIN_IP || '201.19.113.159'; // 🔒 SEU IP REAL
 
-// 🛑 SEU IP REAL (PROTEÇÃO DO ADMIN)
-const IP_SEGURO_ADMIN = '201.19.113.159'; 
-
-app.use(cors({
-    origin: '*', 
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-}));
-
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
 app.use(bodyParser.json());
 
 // ==========================================
-// 🛠️ FUNÇÃO DE IP BLINDADA
+// 🛠️ FUNÇÕES DE SUPORTE (SEGURANÇA E ID)
 // ==========================================
+
+// 1. PEGAR IP (PROTEÇÃO CONTRA PROXIES)
 const getIp = (req) => {
     let ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
     if (Array.isArray(ip)) ip = ip[0];
-    if (typeof ip === 'string' && ip.includes(',')) {
-        ip = ip.split(',')[0]; 
-    }
-    if (typeof ip === 'string') {
-        return ip.trim().replace('::ffff:', '');
-    }
+    if (typeof ip === 'string' && ip.includes(',')) ip = ip.split(',')[0]; 
+    if (typeof ip === 'string') return ip.trim().replace('::ffff:', '');
     return '';
 };
 
+// 2. IDENTIFICAR QUEM ESTÁ LOGADO (COMPATÍVEL COM 'Bearer TOKEN_FIXO_')
+const getUserFromToken = (req) => {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
+
+    const token = authHeader.split(' ')[1];
+
+    // Token especial do Admin
+    if (token === 'ADMIN_TOKEN_SECURE') {
+        return db.users.find(u => u.role === 'admin');
+    }
+
+    // Token dos clientes (Padrão: TOKEN_FIXO_ID ou TOKEN_ID)
+    let userId = null;
+    if (token.startsWith('TOKEN_FIXO_')) {
+        userId = parseInt(token.replace('TOKEN_FIXO_', ''));
+    } else if (token.startsWith('TOKEN_')) {
+        userId = parseInt(token.replace('TOKEN_', ''));
+    }
+    
+    if (userId) {
+        return db.users.find(u => u.id === userId && u.status === 'ATIVO');
+    }
+    
+    return null;
+};
+
+// 3. FORMATAR DADOS PARA O FRONTEND
+const formatarTransacao = (dados, tipo, usuario, ip, description) => {
+    // Calcula valor líquido, bruto, etc., conforme o Front-end espera
+    const isDeposit = tipo === 'DEPOSITO';
+    const amount = Number(dados.amount || dados.transactionAmount || 0);
+    const taxaApi = 0.50; // Taxa simulada da Mistic
+    const taxaElite = isDeposit ? (amount * 0.04) : 1.00;
+    const taxaTotal = isDeposit ? taxaApi + taxaElite : taxaElite;
+    const valorLiquido = isDeposit ? (amount - taxaTotal) : amount;
+    const valorBruto = amount;
+    
+    return {
+        id: dados.id || `tx_${Date.now()}`,
+        userId: usuario ? usuario.id : 0, 
+        valorLiquido: valorLiquido.toFixed(2), 
+        valorBruto: valorBruto.toFixed(2), 
+        taxaMinha: taxaElite.toFixed(2), 
+        taxaApi: taxaApi.toFixed(2), 
+        descricao: description || (isDeposit ? 'Depósito Elite Pay' : 'Saque Elite Pay'),
+        status: dados.transactionState || (isDeposit ? 'pendente' : 'aprovado'), // Depósito começa pendente, Saque é aprovado aqui (simulação)
+        tipo: isDeposit ? 'deposito' : 'saque',
+        metodo: "PIX",
+        criadoEm: dados.createdAt || new Date().toISOString()
+    };
+};
+
 // ==========================================
-// 🧪 BANCO DE DADOS (COM LISTA DE SUGESTÕES)
+// 🧪 BANCO DE DADOS (COM ESTATÍSTICAS)
 // ==========================================
 const db = {
     users: [
         { id: 1, email: 'admin@pay.com', password: 'admin', status: 'ATIVO', name: 'Administrador', role: 'admin', saldoCents: 0, daily_stats: { transactionCount: 0, totalReceived: 0 } },
-        { id: 2, email: 'cliente@teste.com', password: '123', status: 'ATIVO', name: 'Cliente Teste', role: 'user', saldoCents: 10000, daily_stats: { transactionCount: 2, totalReceived: 10000 } },
-        { id: 3, email: 'israel@email.com', password: '123', status: 'ATIVO', name: 'Israel Roza Silva', role: 'user', saldoCents: 50000, daily_stats: { transactionCount: 5, totalReceived: 35000 } },
-        { id: 4, email: 'janislene@email.com', password: '123', status: 'ATIVO', name: 'JANISLENE ROSA DE ASSIS', role: 'user', saldoCents: 25000, daily_stats: { transactionCount: 1, totalReceived: 5000 } },
-        { id: 5, email: 'inacio@email.com', password: '123', status: 'PENDENTE', name: 'INACIO LENNON MORAES', role: 'user', saldoCents: 0, daily_stats: { transactionCount: 0, totalReceived: 0 } },
+        { id: 2, email: 'cliente@teste.com', password: '123', status: 'ATIVO', name: 'Cliente Teste', role: 'user', saldoCents: 50000, daily_stats: { transactionCount: 2, totalReceived: 150000 } }, // R$ 500.00 de saldo
     ],
-    // Histórico inicial para a tabela não ficar vazia
+    // Histórico de transações simuladas (usando o formato que o Front espera)
     transactions: [
-        { id: "1", valorLiquido: 150.00, valorBruto: 150.00, taxaMinha: 0, taxaApi: 0, descricao: "Depósito Inicial", status: "PENDENTE", tipo: "deposito", metodo: "PIX", criadoEm: new Date().toISOString() },
-        { id: "2", valorLiquido: 1250.00, valorBruto: 1250.00, taxaMinha: 0, taxaApi: 0, descricao: "Saque Elite Pay", status: "aprovado", tipo: "saque", metodo: "PIX", criadoEm: new Date().toISOString() }
+        { id: "1", userId: 2, valorLiquido: 150.00, valorBruto: 150.00, taxaMinha: 6.50, taxaApi: 0.50, descricao: "Depósito Inicial", status: "aprovado", tipo: "deposito", metodo: "PIX", criadoEm: new Date().toISOString() },
+        { id: "2", userId: 2, valorLiquido: 50.00, valorBruto: 50.00, taxaMinha: 1.00, taxaApi: 0, descricao: "Saque Elite Pay", status: "aprovado", tipo: "saque", metodo: "PIX", criadoEm: new Date().toISOString() }
     ],
-    credentials: {
-        '2': { hasCredentials: true, clientId: 'live_jbbmajuwwmq28hv', clientSecret: 'sk_isxps89xg5jodulumlayuy40d', createdAt: new Date().toISOString() }
-    },
+    credentials: {}, // Deixando vazio para ser gerado dinamicamente
     allowedIps: []
 };
 
-
-// ==========================================
-// 🔒 MIDDLEWARE AUTHENTICATION (CORRIGIDO PARA O FRONT-END)
-// ==========================================
+// Middleware de Autenticação Real (utiliza getUserFromToken)
 const checkAuth = (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    // 1. O Front-end envia 'Bearer TOKEN_ID'
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        console.log('🚫 Falha Auth: Header ou Bearer faltando.');
-        return res.status(401).json({ error: 'Token inválido' });
-    }
-
-    const token = authHeader.split(' ')[1]; // Pega o TOKEN_ID
+    req.user = getUserFromToken(req);
     
-    // 2. Verifica Admin
-    if (token === 'ADMIN_TOKEN_SECURE') {
-        req.user = db.users.find(u => u.role === 'admin');
-        if (req.user) return next();
-        console.log('🚫 Falha Auth: Admin token inválido.');
-        return res.status(401).json({ error: 'Token inválido' });
+    if (req.user && req.user.status === 'ATIVO') {
+        // Se for token do Admin ou Cliente ATIVO
+        return next();
     }
     
-    // 3. Verifica Cliente (TOKEN_[ID])
-    if (token.startsWith('TOKEN_')) {
-        const userId = parseInt(token.replace('TOKEN_', ''));
-        req.user = db.users.find(u => u.id === userId && u.status === 'ATIVO');
-        
-        if (req.user) {
-            console.log(`✅ Auth OK para User ID: ${userId}`);
-            return next();
-        }
-    }
-    
-    // 4. Se não autenticou de nenhuma forma
-    console.log(`🚫 Falha Auth: Token desconhecido ou inativo. Recebido: ${token}`);
-    return res.status(401).json({ error: 'Token inválido' });
+    console.log('🚫 REQUISIÇÃO BLOQUEADA: 401 Unauthorized');
+    return res.status(401).json({ error: 'Token inválido ou sessão expirada' });
 };
 
 // ==========================================
-// 🚀 ROTAS DE LOGIN (COM A TRAVA DE IP)
+// 🚀 ROTAS DE LOGIN & CADASTRO
 // ==========================================
 const authRoutes = express.Router();
 
+// LOGIN
 authRoutes.post('/login', (req, res) => {
-    const { email, password, senha } = req.body;
-    const pass = password || senha;
-    const ipAtual = getIp(req); 
-
-    console.log(`📡 LOGIN | Email: ${email} | IP Detectado: [${ipAtual}]`);
+    const { email, senha, password } = req.body;
+    const pass = senha || password;
+    const ipAtual = getIp(req);
 
     // --- BLOQUEIO DE SEGURANÇA ADMIN ---
     if (email === ADMIN_EMAIL) {
         if (pass !== ADMIN_PASS) return res.status(401).json({ error: 'Senha incorreta' });
-        
         if (ipAtual !== IP_SEGURO_ADMIN) {
-            console.log(`🚫 ADMIN BLOQUEADO: IP ${ipAtual} não é ${IP_SEGURO_ADMIN}`);
-            return res.status(403).json({ 
-                error: 'ACESSO NEGADO: IP não autorizado.',
-                ip_detectado: ipAtual 
-            });
+            return res.status(403).json({ error: 'IP não autorizado para Admin', ip_detectado: ipAtual });
         }
-
-        console.log(`✅ ADMIN LIBERADO: IP ${ipAtual}`);
-        const adminUser = db.users.find(u => u.email === ADMIN_EMAIL);
-        // Retorna o token simples para o Front-end
+        const adminUser = db.users.find(u => u.role === 'admin');
         return res.status(200).json({ token: 'ADMIN_TOKEN_SECURE', user: adminUser });
     }
 
-    // --- LOGIN DE CLIENTES (SEM BLOQUEIO DE IP) ---
+    // --- LÓGICA DE CLIENTE ---
     const user = db.users.find(u => u.email === email && (u.password === pass));
     
     if (!user) return res.status(401).json({ error: 'Login incorreto' });
-    if (user.status !== 'ATIVO') return res.status(403).json({ error: 'Conta pendente' });
+    if (user.status !== 'ATIVO') return res.status(403).json({ error: 'Sua conta está pendente de aprovação pelo administrador.' });
 
-    // Retorna o token simples para o Front-end
+    // Retorna o token simples que garante a persistência (TOKEN_ID)
     res.status(200).json({ token: 'TOKEN_' + user.id, user });
 });
 
+// REGISTRO
 authRoutes.post('/register', (req, res) => {
     const { email, name, password, cpf } = req.body;
-    const newUser = { id: Date.now(), email, name, password, cpf, status: 'PENDENTE', role: 'user', saldoCents: 0, daily_stats: { transactionCount: 0, totalReceived: 0 } };
+    const newUser = { 
+        id: db.users.length + 1,
+        email, name, password, cpf, 
+        status: 'PENDENTE', role: 'user', 
+        saldoCents: 0,
+        daily_stats: { transactionCount: 0, totalReceived: 0 }
+    };
     db.users.push(newUser);
-    res.status(201).json({ message: 'Cadastro realizado', user: newUser });
+    res.status(201).json({ message: 'Cadastro realizado! Aguarde aprovação.', user: newUser });
 });
 
-// A rota /me precisa do middleware de autenticação (checkAuth) para funcionar!
+// GET PROFILE (/me)
 authRoutes.get('/me', checkAuth, (req, res) => {
-    // req.user foi populado pelo checkAuth
-    if (!req.user) return res.status(401).json({ error: 'Falha ao buscar perfil' });
-    res.json(req.user);
+    // req.user já é o usuário autenticado, buscado pelo getUserFromToken no checkAuth
+    if(req.user) res.json(req.user);
+    else res.status(401).json({error: 'Sessão expirada'});
 });
-
 app.use('/api/auth', authRoutes);
 
 // ==========================================
-// 💸 ROTAS DE TRANSAÇÃO (UTILIZA checkAuth)
+// 💸 ROTAS DE TRANSAÇÃO (INTEGRAÇÃO REAL MISTICPAY)
 // ==========================================
 const txRoutes = express.Router();
 
+// 1. CRIAR PIX (RECEBER)
 txRoutes.post('/create', checkAuth, async (req, res) => {
     const { amount, description } = req.body;
-    const userId = req.user.id;
-    console.log(`🔄 [Backend] User ${userId} Gerando PIX de R$ ${amount}...`);
+    const user = req.user; 
+    
+    if (!user) return res.status(401).json({ error: 'Login necessário' });
+
+    console.log(`🔄 Criando PIX real para ${user.name} (R$ ${amount})...`);
 
     try {
-        // Simulação da chamada para a MisticPay, pois a URL real pode falhar
-        const data = {
-            transactionId: `ep_in_${Date.now()}`,
-            qrcodeUrl: "https://placehold.co/256x256/22c55e/ffffff?text=PIX+R$"+amount,
-            copyPaste: `13213213201.QRCODE.PIX.${Date.now()}`
-        };
-
-        // Adiciona à lista em memória (garantindo que o status e o tipo batam com o Front-end)
-        db.transactions.unshift({ 
-            id: data.transactionId, 
-            valorLiquido: Number(amount), 
-            valorBruto: Number(amount), 
-            taxaMinha: 0.00, 
-            taxaApi: 0.00, 
-            descricao: description || 'Depósito Elite Pay', 
-            status: 'pendente', 
-            tipo: 'deposito', 
-            metodo: 'PIX', 
-            criadoEm: new Date().toISOString() 
+        const misticResponse = await fetch(`${MISTIC_URL}/api/transactions/create`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'ci': MISTIC_CI, 'cs': MISTIC_CS },
+            body: JSON.stringify({
+                amount: Number(amount),
+                description: description || 'Depósito Elite Pay',
+                payerName: user.name, 
+                payerDocument: "000.000.000-00", // MisticPay precisa de um documento, usando placeholder
+                transactionId: `tx_${Date.now()}_${user.id}` // ID único
+            })
         });
+
+        const data = await misticResponse.json();
         
-        // Atualiza as estatísticas diárias (simulação)
-        const user = db.users.find(u => u.id === userId);
-        if (user) {
-             user.saldoCents += Number(amount) * 100;
-             user.daily_stats.transactionCount++;
-             user.daily_stats.totalReceived += Number(amount);
+        if (!misticResponse.ok) {
+            console.error('❌ Erro MisticPay:', data);
+            return res.status(400).json({ error: data.message || 'Erro na API de Pagamento MisticPay' });
         }
 
-        res.json(data);
+        // Salva vinculando ao ID do usuário
+        const novaTx = formatarTransacao(
+            { ...data, transactionState: 'pendente', amount: Number(amount), createdAt: new Date().toISOString() }, 
+            'DEPOSITO', user, getIp(req), description
+        );
+        db.transactions.unshift(novaTx);
+        
+        // O Front-end espera os dados do QR Code da MisticPay
+        res.json({
+            qrcodeUrl: data.qrcodeUrl, 
+            copyPaste: data.copyPaste,
+            data: novaTx // Envia também os dados formatados
+        });
 
     } catch (error) {
-        console.error('❌ Erro:', error);
-        res.status(500).json({ error: 'Erro ao conectar API de Pix' });
+        console.error('❌ Erro de conexão:', error);
+        res.status(500).json({ error: 'Erro interno ao tentar gerar PIX' });
     }
 });
 
+// 2. SAQUE (TRANSFERIR)
 txRoutes.post('/withdraw', checkAuth, async (req, res) => {
-    const { amount, description } = req.body;
-    const userId = req.user.id;
+    const { amount, pixKey, pixKeyType, description } = req.body;
+    const user = req.user;
     
-    // Simulação de saque mantendo estrutura
-    const txFee = 1.00;
-    const totalAmount = Number(amount) + txFee;
+    const txFee = 1.00; // Taxa fixa de R$ 1,00
+    const totalDebit = Number(amount) + txFee;
     
-    const user = db.users.find(u => u.id === userId);
-    
-    if (user.saldoCents < totalAmount * 100) {
-         return res.status(402).json({ error: 'Saldo insuficiente para saque.' });
+    if (user.saldoCents < totalDebit * 100) {
+        return res.status(402).json({ error: 'Saldo insuficiente para saque' });
     }
+
+    console.log(`💸 Solicitando Saque real de R$ ${amount} para ${pixKey} (User: ${user.id})...`);
     
-    user.saldoCents -= totalAmount * 100;
-    
-    const novaTx = { 
-        id: `out_${Date.now()}`, 
-        valorLiquido: Number(amount), 
-        valorBruto: totalAmount, 
-        taxaMinha: txFee, 
-        taxaApi: 0, 
-        descricao: description || "Saque Solicitado", 
-        status: "aprovado", 
-        tipo: "saque", 
-        metodo: "PIX", 
-        criadoEm: new Date().toISOString() 
-    };
-    db.transactions.unshift(novaTx);
-    
-    // Reinicia as estatísticas diárias para o refresh funcionar corretamente
-    user.daily_stats = { transactionCount: 0, totalReceived: 0 };
-    
-    res.json(novaTx);
+    try {
+        const misticResponse = await fetch(`${MISTIC_URL}/api/transactions/withdraw`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'ci': MISTIC_CI, 'cs': MISTIC_CS },
+            body: JSON.stringify({
+                amount: Number(amount),
+                pixKey: pixKey,
+                pixKeyType: pixKeyType,
+                description: description || 'Saque Elite Pay',
+                transactionId: `out_${Date.now()}_${user.id}`
+            })
+        });
+
+        const data = await misticResponse.json();
+        
+        if (!misticResponse.ok) {
+            console.error('❌ Erro MisticPay Saque:', data);
+            return res.status(400).json({ error: data.message || 'Erro na API de Saque MisticPay' });
+        }
+        
+        // Atualiza o saldo do usuário (realiza o débito)
+        user.saldoCents -= totalDebit * 100;
+        
+        // Salva a transação
+        const novaTx = formatarTransacao(
+            { ...data, amount: Number(amount), transactionState: 'aprovado', createdAt: new Date().toISOString() }, 
+            'RETIRADA', user, getIp(req), description
+        );
+        db.transactions.unshift(novaTx);
+        
+        // Limpa stats diários (simulação)
+        user.daily_stats = { transactionCount: 0, totalReceived: 0 }; 
+
+        res.json({ success: true, message: 'Saque realizado', transaction: novaTx });
+
+    } catch (error) {
+        console.error('❌ Erro de conexão no saque:', error);
+        res.status(500).json({ error: 'Erro interno ao tentar realizar saque' });
+    }
 });
 
-// A rota de histórico de transações agora usa o checkAuth
+
+// 3. LISTAR (O FILTRO MÁGICO DE PRIVACIDADE)
 txRoutes.get('/', checkAuth, (req, res) => {
-    // No Backend simulado, retorna todas as transações, mas em um sistema real, filtraria por req.user.id
-    res.json({ success: true, transactions: db.transactions });
+    const user = req.user;
+    
+    if (user.role === 'admin') {
+        return res.json({ success: true, transactions: db.transactions });
+    }
+
+    // SE FOR CLIENTE -> VÊ APENAS AS DELE
+    const minhasTransacoes = db.transactions.filter(tx => tx.userId === user.id);
+    res.json({ success: true, transactions: minhasTransacoes });
 });
 
 app.use('/api/transactions', txRoutes);
 
 // ==========================================
-// 🔑 ROTAS AUXILIARES E ADMIN
+// 🔑 ROTAS DE CREDENCIAIS (INDIVIDUAL)
 // ==========================================
 const credRoutes = express.Router();
 
 credRoutes.get('/', checkAuth, (req, res) => {
-    const creds = db.credentials['2'] || { hasCredentials: false };
-    res.json(creds);
+    const userId = req.user.id;
+    res.json(db.credentials[userId] || { hasCredentials: false });
 });
 
 credRoutes.post('/generate', checkAuth, (req, res) => {
+    const userId = req.user.id;
+    
     const newCreds = {
         hasCredentials: true,
         clientId: 'live_' + Math.random().toString(36).substr(2, 16),
         clientSecret: 'sk_' + Math.random().toString(36).substr(2, 32),
         createdAt: new Date().toISOString()
     };
-    db.credentials[req.user.id] = newCreds;
+    db.credentials[userId] = newCreds;
     res.json(newCreds);
 });
 
@@ -276,10 +324,10 @@ credRoutes.delete('/', checkAuth, (req, res) => {
     res.json({ success: true });
 });
 
-// IPs
+// IPs Permitidos (Admin Only ou User Specific)
 credRoutes.get('/ips', checkAuth, (req, res) => res.json({ ips: db.allowedIps }));
 credRoutes.post('/ips', checkAuth, (req, res) => {
-    const newIp = { id: Math.random(), ip_address: req.body.ip, criado_em: new Date().toISOString() };
+    const newIp = { id: Math.random(), ip: req.body.ip, criado_em: new Date().toISOString() };
     db.allowedIps.push(newIp);
     res.json(newIp);
 });
@@ -287,29 +335,37 @@ credRoutes.delete('/ips/:id', checkAuth, (req, res) => {
     db.allowedIps = db.allowedIps.filter(i => i.id != req.params.id);
     res.json({ success: true });
 });
-
 app.use('/api/credentials', credRoutes);
 
-// --- ROTAS DO ADMIN (UTILIZA checkAuth) ---
+// ==========================================
+// 👑 ROTAS DO PAINEL ADMIN (GESTÃO DE USUÁRIOS)
+// ==========================================
+
+// Todas as rotas abaixo devem ser protegidas no Admin real.
 app.get('/api/users', checkAuth, (req, res) => {
-    // No sistema real, faria a trava de role: 'admin' aqui
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
     res.json(db.users);
 });
 
-app.get('/api/logs', checkAuth, (req, res) => res.json([]));
-
 app.put('/api/users/:id/status', checkAuth, (req, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
     const user = db.users.find(u => u.id == req.params.id);
     if (user) { 
         user.status = req.body.status; 
         res.json({ success: true }); 
+    } else {
+        res.status(404).json({ error: 'Usuário não encontrado' });
     }
-    else res.status(404).json({ error: 'User not found' });
 });
 
+app.get('/api/logs', checkAuth, (req, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+    res.json([]);
+});
+
+// Inicialização
 app.listen(PORT, () => {
-    console.log(`✅ SERVIDOR RODANDO NA PORTA ${PORT}`);
-    console.log(`🔒 SEGURANÇA ADMIN ATIVA: IP ${IP_SEGURO_ADMIN}`);
-    console.log(`ℹ️ MODO: SIMULAÇÃO DE BACKEND`);
+    console.log(`✅ SERVIDOR ELITE PAY RODANDO NA PORTA ${PORT}`);
+    console.log(`🔒 IP ADMIN SEGURO: ${IP_SEGURO_ADMIN}`);
+    console.log(`✨ INTEGRAÇÃO MISTICPAY: ATIVA`);
 });
-
