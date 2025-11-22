@@ -16,7 +16,7 @@ const MISTIC_URL = 'https://api.misticpay.com';
 
 const ADMIN_EMAIL = 'admin@pay.com';
 const ADMIN_PASS = 'admin';
-const IP_SEGURO_ADMIN = process.env.ADMIN_IP || '201.19.113.159';
+const IP_SEGURO_ADMIN = process.env.ADMIN_IP || '201.19.113.159'; // 🔒 SEU IP REAL
 
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
 app.use(bodyParser.json());
@@ -38,6 +38,7 @@ const getUserFromToken = (req) => {
     if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
 
     const token = authHeader.split(' ')[1];
+
     if (token === 'ADMIN_TOKEN_SECURE') {
         return db.users.find(u => u.role === 'admin');
     }
@@ -82,12 +83,11 @@ const formatarTransacao = (dados, tipo, usuario, ip, description) => {
 };
 
 // ==========================================
-// 🧪 BANCO DE DADOS (COM CPF DE TESTE VÁLIDO)
+// 🧪 BANCO DE DADOS (COM ESTATÍSTICAS)
 // ==========================================
 const db = {
     users: [
         { id: 1, email: 'admin@pay.com', password: 'admin', status: 'ATIVO', name: 'Administrador', role: 'admin', saldoCents: 0, daily_stats: { transactionCount: 0, totalReceived: 0 } },
-        // CLIENTE TESTE (ID 2): CPF VÁLIDO DE TESTE (Exemplo)
         { id: 2, email: 'cliente@teste.com', password: '123', status: 'ATIVO', name: 'Cliente Teste', cpf: '00000000000', role: 'user', saldoCents: 50000, daily_stats: { transactionCount: 2, totalReceived: 150000 } },
     ],
     transactions: [
@@ -171,7 +171,6 @@ txRoutes.post('/create', checkAuth, async (req, res) => {
     const amountFloat = Number(amount);
     const transactionId = `tx_${Date.now()}_${user.id}`;
     
-    // ⚠️ GARANTINDO O CPF, MESMO QUE SEJA O TESTE ⚠️
     const payerDocument = user.cpf || '00000000000';
     
     const requestBody = {
@@ -191,7 +190,6 @@ txRoutes.post('/create', checkAuth, async (req, res) => {
             body: JSON.stringify(requestBody)
         });
 
-        // Tenta ler a resposta em texto para debug e depois JSON
         const responseText = await misticResponse.text();
         let data;
         try {
@@ -204,17 +202,17 @@ txRoutes.post('/create', checkAuth, async (req, res) => {
         // Se a resposta HTTP não for 2xx (Sucesso)
         if (!misticResponse.ok) {
             console.error(`❌ Erro MisticPay [Status ${misticResponse.status}]:`, data);
-            // Retorna o erro exato para o Front-end
             return res.status(misticResponse.status).json({ 
                 error: data.message || data.error || 'Erro na API MisticPay. Verifique os logs.', 
                 details: data
             });
         }
         
-        // ⚠️ VERIFICA SE OS CAMPOS CRÍTICOS EXISTEM ⚠️
+        // ⚠️ CORREÇÃO CRÍTICA AQUI: O Front-end espera qrcodeUrl e copyPaste no objeto raiz
         if (!data.qrcodeUrl || !data.copyPaste) {
              console.error('❌ SUCESSO VAZIO: MisticPay retornou 200, mas sem QR Code/CopyPaste. Resposta:', data);
-             return res.status(500).json({ error: 'Transação criada, mas sem dados de QR Code. Verifique o status na MisticPay.' });
+             // Retorna os dados que vieram, mas avisa que os campos essenciais estão faltando
+             return res.status(500).json({ error: 'Transação criada, mas sem dados de QR Code. Verifique o status na MisticPay.', details: data });
         }
 
         // ✅ SUCESSO: SALVA A TRANSAÇÃO E RETORNA OS DADOS
@@ -224,7 +222,7 @@ txRoutes.post('/create', checkAuth, async (req, res) => {
         );
         db.transactions.unshift(novaTx);
         
-        // RETORNA EXATAMENTE O QUE O FRONT-END ESPERA
+        // RETORNA EXATAMENTE O QUE O FRONT-END ESPERA (qrcodUrl e copyPaste no nível principal)
         res.json({
             qrcodeUrl: data.qrcodeUrl, 
             copyPaste: data.copyPaste,
@@ -389,4 +387,3 @@ app.listen(PORT, () => {
     console.log(`🔒 IP ADMIN SEGURO: ${IP_SEGURO_ADMIN}`);
     console.log(`✨ INTEGRAÇÃO MISTICPAY: ATIVA`);
 });
-
