@@ -66,7 +66,6 @@ const formatarTransacao = (dados, tipo, usuario, ip, description) => {
     const isDeposit = tipo === 'DEPOSITO';
     const amount = Number(dados.amount || dados.transactionAmount || 0);
     
-    // Taxas conforme a simulação anterior (ajuste se necessário)
     const taxaApi = 0.50;
     const taxaElite = isDeposit ? (amount * 0.04) : 1.00;
     const taxaTotal = isDeposit ? taxaApi + taxaElite : taxaElite;
@@ -180,33 +179,52 @@ txRoutes.post('/create', checkAuth, async (req, res) => {
     
     if (!user) return res.status(401).json({ error: 'Login necessário' });
 
-    // ⚠️ ATENÇÃO: O Front-end envia o amount como FLOAT, mas a MisticPay espera NUMBER (FLOAT)
     const amountFloat = Number(amount);
+    const transactionId = `tx_${Date.now()}_${user.id}`;
+    
+    // CAMPOS OBRIGATÓRIOS DA MISTICPAY (Conforme sua documentação)
+    const requestBody = {
+        amount: amountFloat,
+        description: description || 'Depósito Elite Pay',
+        payerName: user.name || 'Cliente Elite Pay', 
+        payerDocument: user.cpf || '00000000000', // CPF do cliente ElitePay
+        transactionId: transactionId,
+        // Adicione projectWebhook e splitUser/splitTax se estiverem no seu .env
+        // projectWebhook: process.env.PROJECT_WEBHOOK_URL, 
+    };
+
+    console.log(`➡️ REQ MisticPay (create): ${JSON.stringify(requestBody)}`);
 
     try {
         const misticResponse = await fetch(`${MISTIC_URL}/api/transactions/create`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'ci': MISTIC_CI, 'cs': MISTIC_CS },
-            body: JSON.stringify({
-                amount: amountFloat, // Enviando o valor como FLOAT
-                description: description || 'Depósito Elite Pay',
-                payerName: user.name || 'Cliente Elite Pay', 
-                // Assumindo que o CPF está no objeto user. Se não estiver, use um placeholder válido.
-                payerDocument: user.cpf || '00000000000', 
-                transactionId: `tx_${Date.now()}_${user.id}`
-            })
+            body: JSON.stringify(requestBody)
         });
 
-        const data = await misticResponse.json();
+        // Tenta ler a resposta em texto primeiro se o JSON falhar, para debug
+        const responseText = await misticResponse.text();
+        let data;
+        try {
+            data = JSON.parse(responseText);
+        } catch (e) {
+            console.error('❌ MISTICPAY NÃO RETORNOU JSON VÁLIDO. TEXTO:', responseText);
+            return res.status(500).json({ error: 'Erro de formatação na API MisticPay. Verifique o log do servidor.', rawResponse: responseText });
+        }
         
+        // Se a resposta HTTP não for 2xx (Sucesso)
         if (!misticResponse.ok) {
-            console.error('❌ Erro MisticPay:', data);
-            return res.status(400).json({ error: data.message || data.error || 'Erro na API de Pagamento MisticPay' });
+            console.error(`❌ Erro MisticPay [Status ${misticResponse.status}]:`, data);
+            // Retorna o erro exato da API MisticPay para o Front-end
+            return res.status(misticResponse.status).json({ 
+                error: data.message || data.error || 'Erro na API MisticPay. Verifique os logs.', 
+                details: data
+            });
         }
 
-        // Salva vinculando ao ID do usuário
+        // ✅ SUCESSO: SALVA A TRANSAÇÃO E RETORNA OS DADOS
         const novaTx = formatarTransacao(
-            { ...data, transactionState: 'PENDENTE', amount: amountFloat, createdAt: new Date().toISOString() }, 
+            { ...data, transactionState: 'PENDENTE', amount: amountFloat, transactionId: transactionId, createdAt: new Date().toISOString() }, 
             'DEPOSITO', user, getIp(req), description
         );
         db.transactions.unshift(novaTx);
@@ -219,8 +237,8 @@ txRoutes.post('/create', checkAuth, async (req, res) => {
         });
 
     } catch (error) {
-        console.error('❌ Erro de conexão:', error);
-        res.status(500).json({ error: 'Erro interno ao tentar gerar PIX' });
+        console.error('❌ Erro de conexão/rede:', error);
+        res.status(500).json({ error: 'Erro interno ao tentar gerar PIX (Falha de rede/DNS)' });
     }
 });
 
@@ -232,6 +250,7 @@ txRoutes.post('/withdraw', checkAuth, async (req, res) => {
     const amountFloat = Number(amount);
     const txFee = 1.00;
     const totalDebit = amountFloat + txFee;
+    const transactionId = `out_${Date.now()}_${user.id}`;
     
     if (user.saldoCents < totalDebit * 100) {
         return res.status(402).json({ error: 'Saldo insuficiente para saque' });
@@ -239,44 +258,56 @@ txRoutes.post('/withdraw', checkAuth, async (req, res) => {
 
     console.log(`💸 Solicitando Saque real de R$ ${amount} para ${pixKey} (User: ${user.id})...`);
     
+    // CAMPOS OBRIGATÓRIOS DA MISTICPAY (Conforme sua documentação)
+    const requestBody = {
+        amount: amountFloat,
+        pixKey: pixKey,
+        pixKeyType: pixKeyType,
+        description: description || 'Saque Elite Pay',
+        transactionId: transactionId,
+    };
+    
     try {
         const misticResponse = await fetch(`${MISTIC_URL}/api/transactions/withdraw`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'ci': MISTIC_CI, 'cs': MISTIC_CS },
-            body: JSON.stringify({
-                amount: amountFloat, // Enviando o valor como FLOAT
-                pixKey: pixKey,
-                pixKeyType: pixKeyType,
-                description: description || 'Saque Elite Pay',
-                transactionId: `out_${Date.now()}_${user.id}`
-            })
+            body: JSON.stringify(requestBody)
         });
 
-        const data = await misticResponse.json();
-        
-        if (!misticResponse.ok) {
-            console.error('❌ Erro MisticPay Saque:', data);
-            return res.status(400).json({ error: data.message || data.error || 'Erro na API de Saque MisticPay' });
+        const responseText = await misticResponse.text();
+        let data;
+        try {
+            data = JSON.parse(responseText);
+        } catch (e) {
+            console.error('❌ MISTICPAY SAQUE NÃO RETORNOU JSON VÁLIDO. TEXTO:', responseText);
+            return res.status(500).json({ error: 'Erro de formatação na API MisticPay Saque. Verifique o log do servidor.', rawResponse: responseText });
         }
         
-        // ATUALIZAÇÃO DO SALDO (DÉBITO)
+        if (!misticResponse.ok) {
+            console.error(`❌ Erro MisticPay Saque [Status ${misticResponse.status}]:`, data);
+            return res.status(misticResponse.status).json({ 
+                error: data.message || data.error || 'Erro na API de Saque MisticPay. Verifique os logs.', 
+                details: data
+            });
+        }
+        
+        // ✅ SUCESSO: Atualiza o saldo do usuário (realiza o débito)
         user.saldoCents -= totalDebit * 100;
         
         // Salva a transação
         const novaTx = formatarTransacao(
-            { ...data, transactionState: 'COMPLETO', amount: amountFloat, createdAt: new Date().toISOString() }, 
+            { ...data, transactionState: 'COMPLETO', amount: amountFloat, transactionId: transactionId, createdAt: new Date().toISOString() }, 
             'RETIRADA', user, getIp(req), description
         );
         db.transactions.unshift(novaTx);
         
-        // Limpa stats diários (simulação) para o refresh funcionar
         user.daily_stats = { transactionCount: 0, totalReceived: 0 }; 
 
         res.json({ success: true, message: 'Saque realizado', transaction: novaTx });
 
     } catch (error) {
         console.error('❌ Erro de conexão no saque:', error);
-        res.status(500).json({ error: 'Erro interno ao tentar realizar saque' });
+        res.status(500).json({ error: 'Erro interno ao tentar realizar saque (Falha de rede/DNS)' });
     }
 });
 
@@ -299,9 +330,6 @@ app.use('/api/transactions', txRoutes);
 // 🔑 ROTAS DE CREDENCIAIS (MANUTENÇÃO)
 // ==========================================
 const credRoutes = express.Router();
-
-// Rotas de credenciais e IPs omitidas por serem idênticas à versão anterior, 
-// focando apenas nas rotas de Transação e Auth.
 
 credRoutes.get('/', checkAuth, (req, res) => {
     const userId = req.user.id;
