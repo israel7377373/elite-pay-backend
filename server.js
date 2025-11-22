@@ -17,32 +17,35 @@ const MISTIC_URL = 'https://api.misticpay.com';
 const ADMIN_EMAIL = 'admin@pay.com';
 const ADMIN_PASS = 'admin';
 
-// 🛑 IP DE SEGURANÇA MÁXIMA (SEU IP REAL)
+// 🛑 IP DE SEGURANÇA MÁXIMA (SEU IP)
 const IP_SEGURO_ADMIN = '201.19.113.159'; 
 
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
 app.use(bodyParser.json());
 
 // ==========================================
-// 🛠️ FUNÇÕES AUXILIARES
+// 🛠️ FUNÇÃO DE IP CORRIGIDA (AGORA VAI FUNCIONAR)
 // ==========================================
 
-// 1. Pegar IP Real (Tratamento Robusto para Render/Proxies)
 const getIp = (req) => {
-    // Tenta pegar o cabeçalho do proxy (padrão do Render)
     let ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
+    
+    // 1. Se vier como Array (caso raro), pega o primeiro elemento
+    if (Array.isArray(ip)) {
+        ip = ip[0];
+    }
 
-    // Se houver múltiplos IPs (proxy chain), pega o primeiro (o do cliente real)
+    // 2. Se vier como string com vírgula (O SEU CASO: "201.xx, 172.xx"), corta na vírgula
     if (typeof ip === 'string' && ip.includes(',')) {
-        ip = ip.split(',')[0].trim();
+        ip = ip.split(',')[0]; // Pega só a primeira parte antes da vírgula
     }
 
-    // Remove prefixo IPv6 que às vezes aparece (::ffff:) para garantir comparação limpa
-    if (typeof ip === 'string' && ip.includes('::ffff:')) {
-        ip = ip.replace('::ffff:', '');
+    // 3. Limpa espaços e prefixos IPv6
+    if (typeof ip === 'string') {
+        return ip.trim().replace('::ffff:', '');
     }
-
-    return ip;
+    
+    return '';
 };
 
 // 2. Formatar Transação
@@ -66,7 +69,7 @@ const formatarTransacao = (dados, tipo, usuario, ip, descricaoExtra) => {
 };
 
 // ==========================================
-// 🧪 DADOS INICIAIS (BANCO DE DADOS EM MEMÓRIA)
+// 🧪 DADOS INICIAIS
 // ==========================================
 
 const transacoesIniciais = [
@@ -102,7 +105,7 @@ const checkAuth = (req, res, next) => {
 };
 
 // ==========================================
-// 🚀 ROTAS DE LOGIN (COM BLOQUEIO IP REAL)
+// 🚀 ROTAS DE LOGIN
 // ==========================================
 const authRoutes = express.Router();
 
@@ -110,30 +113,30 @@ authRoutes.post('/login', (req, res) => {
     const { email, password, senha } = req.body;
     const pass = password || senha;
     
-    // Obtém o IP limpo e tratado
+    // Obtém o IP limpo
     const ipAtual = getIp(req);
 
     console.log(`📡 LOGIN TENTATIVA | Email: ${email} | IP Detectado: [${ipAtual}]`);
 
-    // --- LÓGICA DE ADMIN (Blindagem por IP) ---
+    // --- LÓGICA DE ADMIN ---
     if (email === ADMIN_EMAIL) {
         if (pass !== ADMIN_PASS) return res.status(401).json({ error: 'Senha incorreta' });
         
-        // Verifica se o IP é EXATAMENTE o permitido
+        // Compara o IP limpo com o IP seguro
         if (ipAtual !== IP_SEGURO_ADMIN) {
-            console.log(`🚫 ALERTA DE SEGURANÇA: IP ${ipAtual} tentou acessar Admin. Bloqueado.`);
+            console.log(`🚫 ALERTA: IP ${ipAtual} BLOQUEADO (Esperado: ${IP_SEGURO_ADMIN})`);
             return res.status(403).json({ 
-                error: 'ACESSO NEGADO: Seu IP não está autorizado para administração.',
-                ip_detectado: ipAtual // Retorna o IP para você saber qual está chegando se der erro
+                error: 'ACESSO NEGADO: IP não autorizado.',
+                seu_ip: ipAtual 
             });
         }
 
-        console.log(`✅ ACESSO ADMIN LIBERADO para IP: ${ipAtual}`);
+        console.log(`✅ SUCESSO: Admin logado pelo IP ${ipAtual}`);
         const adminUser = db.users.find(u => u.email === ADMIN_EMAIL);
         return res.status(200).json({ token: 'ADMIN_TOKEN_SECURE', user: adminUser });
     }
 
-    // --- CLIENTES (Acesso Livre de IP) ---
+    // --- CLIENTES ---
     const user = db.users.find(u => u.email === email && u.password === pass);
     
     if (!user) return res.status(401).json({ error: 'Login incorreto' });
@@ -157,7 +160,6 @@ app.use('/api/auth', authRoutes);
 // ==========================================
 const txRoutes = express.Router();
 
-// 1. CRIAR DEPÓSITO
 txRoutes.post('/create', checkAuth, async (req, res) => {
     const { amount, description } = req.body;
     const user = db.users[1];
@@ -189,7 +191,6 @@ txRoutes.post('/create', checkAuth, async (req, res) => {
     }
 });
 
-// 2. CRIAR SAQUE
 txRoutes.post('/withdraw', checkAuth, async (req, res) => {
     const { amount, pixKey, pixKeyType, description } = req.body;
     const user = db.users[1];
@@ -251,5 +252,5 @@ app.put('/api/users/:id/status', (req, res) => {
 // Inicialização
 app.listen(PORT, () => {
     console.log(`✅ SERVIDOR COMPLETO RODANDO NA PORTA ${PORT}`);
-    console.log(`🔒 SEGURANÇA MÁXIMA ATIVA: Apenas IP ${IP_SEGURO_ADMIN} pode logar como Admin.`);
+    console.log(`🔒 SEGURANÇA MÁXIMA ATIVA: IP ${IP_SEGURO_ADMIN}`);
 });
