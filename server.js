@@ -16,16 +16,15 @@ const MISTIC_URL = 'https://api.misticpay.com';
 
 const ADMIN_EMAIL = 'admin@pay.com';
 const ADMIN_PASS = 'admin';
-const IP_SEGURO_ADMIN = process.env.ADMIN_IP || '201.19.113.159'; // 🔒 SEU IP REAL
+const IP_SEGURO_ADMIN = process.env.ADMIN_IP || '201.19.113.159';
 
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
 app.use(bodyParser.json());
 
 // ==========================================
-// 🛠️ FUNÇÕES DE SUPORTE (SEGURANÇA E ID)
+// 🛠️ FUNÇÕES DE SUPORTE
 // ==========================================
 
-// 1. PEGAR IP (PROTEÇÃO CONTRA PROXIES)
 const getIp = (req) => {
     let ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
     if (Array.isArray(ip)) ip = ip[0];
@@ -34,19 +33,15 @@ const getIp = (req) => {
     return '';
 };
 
-// 2. IDENTIFICAR QUEM ESTÁ LOGADO (COMPATÍVEL COM 'Bearer TOKEN_FIXO_')
 const getUserFromToken = (req) => {
     const authHeader = req.headers['authorization'];
     if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
 
     const token = authHeader.split(' ')[1];
-
-    // Token especial do Admin
     if (token === 'ADMIN_TOKEN_SECURE') {
         return db.users.find(u => u.role === 'admin');
     }
 
-    // Token dos clientes (Padrão: TOKEN_FIXO_ID ou TOKEN_ID)
     let userId = null;
     if (token.startsWith('TOKEN_FIXO_')) {
         userId = parseInt(token.replace('TOKEN_FIXO_', ''));
@@ -61,7 +56,6 @@ const getUserFromToken = (req) => {
     return null;
 };
 
-// 3. FORMATAR DADOS PARA O FRONTEND (GARANTINDO O FORMATO DO FRONT)
 const formatarTransacao = (dados, tipo, usuario, ip, description) => {
     const isDeposit = tipo === 'DEPOSITO';
     const amount = Number(dados.amount || dados.transactionAmount || 0);
@@ -88,13 +82,13 @@ const formatarTransacao = (dados, tipo, usuario, ip, description) => {
 };
 
 // ==========================================
-// 🧪 BANCO DE DADOS (COM ESTATÍSTICAS)
+// 🧪 BANCO DE DADOS (COM CPF DE TESTE VÁLIDO)
 // ==========================================
 const db = {
     users: [
         { id: 1, email: 'admin@pay.com', password: 'admin', status: 'ATIVO', name: 'Administrador', role: 'admin', saldoCents: 0, daily_stats: { transactionCount: 0, totalReceived: 0 } },
-        // CLIENTE TESTE (ID 2)
-        { id: 2, email: 'cliente@teste.com', password: '123', status: 'ATIVO', name: 'Cliente Teste', cpf: '12345678900', role: 'user', saldoCents: 50000, daily_stats: { transactionCount: 2, totalReceived: 150000 } }, // R$ 500.00 de saldo
+        // CLIENTE TESTE (ID 2): CPF VÁLIDO DE TESTE (Exemplo)
+        { id: 2, email: 'cliente@teste.com', password: '123', status: 'ATIVO', name: 'Cliente Teste', cpf: '00000000000', role: 'user', saldoCents: 50000, daily_stats: { transactionCount: 2, totalReceived: 150000 } },
     ],
     transactions: [
         { id: "1", userId: 2, valorLiquido: 150.00, valorBruto: 150.00, taxaMinha: 6.50, taxaApi: 0.50, descricao: "Depósito Inicial", status: "aprovado", tipo: "deposito", metodo: "PIX", criadoEm: new Date().toISOString() },
@@ -104,7 +98,7 @@ const db = {
     allowedIps: []
 };
 
-// Middleware de Autenticação Real (utiliza getUserFromToken)
+// Middleware de Autenticação
 const checkAuth = (req, res, next) => {
     req.user = getUserFromToken(req);
     
@@ -121,13 +115,11 @@ const checkAuth = (req, res, next) => {
 // ==========================================
 const authRoutes = express.Router();
 
-// LOGIN
 authRoutes.post('/login', (req, res) => {
     const { email, senha, password } = req.body;
     const pass = senha || password;
     const ipAtual = getIp(req);
 
-    // --- BLOQUEIO DE SEGURANÇA ADMIN ---
     if (email === ADMIN_EMAIL) {
         if (pass !== ADMIN_PASS) return res.status(401).json({ error: 'Senha incorreta' });
         if (ipAtual !== IP_SEGURO_ADMIN) {
@@ -137,7 +129,6 @@ authRoutes.post('/login', (req, res) => {
         return res.status(200).json({ token: 'ADMIN_TOKEN_SECURE', user: adminUser });
     }
 
-    // --- LÓGICA DE CLIENTE ---
     const user = db.users.find(u => u.email === email && (u.password === pass));
     
     if (!user) return res.status(401).json({ error: 'Login incorreto' });
@@ -146,7 +137,6 @@ authRoutes.post('/login', (req, res) => {
     res.status(200).json({ token: 'TOKEN_' + user.id, user });
 });
 
-// REGISTRO
 authRoutes.post('/register', (req, res) => {
     const { email, name, password, cpf } = req.body;
     const newUser = { 
@@ -160,7 +150,6 @@ authRoutes.post('/register', (req, res) => {
     res.status(201).json({ message: 'Cadastro realizado! Aguarde aprovação.', user: newUser });
 });
 
-// GET PROFILE (/me)
 authRoutes.get('/me', checkAuth, (req, res) => {
     if(req.user) res.json(req.user);
     else res.status(401).json({error: 'Sessão expirada'});
@@ -182,15 +171,15 @@ txRoutes.post('/create', checkAuth, async (req, res) => {
     const amountFloat = Number(amount);
     const transactionId = `tx_${Date.now()}_${user.id}`;
     
-    // CAMPOS OBRIGATÓRIOS DA MISTICPAY (Conforme sua documentação)
+    // ⚠️ GARANTINDO O CPF, MESMO QUE SEJA O TESTE ⚠️
+    const payerDocument = user.cpf || '00000000000';
+    
     const requestBody = {
         amount: amountFloat,
         description: description || 'Depósito Elite Pay',
         payerName: user.name || 'Cliente Elite Pay', 
-        payerDocument: user.cpf || '00000000000', // CPF do cliente ElitePay
+        payerDocument: payerDocument, 
         transactionId: transactionId,
-        // Adicione projectWebhook e splitUser/splitTax se estiverem no seu .env
-        // projectWebhook: process.env.PROJECT_WEBHOOK_URL, 
     };
 
     console.log(`➡️ REQ MisticPay (create): ${JSON.stringify(requestBody)}`);
@@ -202,24 +191,30 @@ txRoutes.post('/create', checkAuth, async (req, res) => {
             body: JSON.stringify(requestBody)
         });
 
-        // Tenta ler a resposta em texto primeiro se o JSON falhar, para debug
+        // Tenta ler a resposta em texto para debug e depois JSON
         const responseText = await misticResponse.text();
         let data;
         try {
             data = JSON.parse(responseText);
         } catch (e) {
             console.error('❌ MISTICPAY NÃO RETORNOU JSON VÁLIDO. TEXTO:', responseText);
-            return res.status(500).json({ error: 'Erro de formatação na API MisticPay. Verifique o log do servidor.', rawResponse: responseText });
+            return res.status(500).json({ error: 'Erro de formatação na API MisticPay. O Backend recebeu uma resposta não-JSON.', rawResponse: responseText });
         }
         
         // Se a resposta HTTP não for 2xx (Sucesso)
         if (!misticResponse.ok) {
             console.error(`❌ Erro MisticPay [Status ${misticResponse.status}]:`, data);
-            // Retorna o erro exato da API MisticPay para o Front-end
+            // Retorna o erro exato para o Front-end
             return res.status(misticResponse.status).json({ 
                 error: data.message || data.error || 'Erro na API MisticPay. Verifique os logs.', 
                 details: data
             });
+        }
+        
+        // ⚠️ VERIFICA SE OS CAMPOS CRÍTICOS EXISTEM ⚠️
+        if (!data.qrcodeUrl || !data.copyPaste) {
+             console.error('❌ SUCESSO VAZIO: MisticPay retornou 200, mas sem QR Code/CopyPaste. Resposta:', data);
+             return res.status(500).json({ error: 'Transação criada, mas sem dados de QR Code. Verifique o status na MisticPay.' });
         }
 
         // ✅ SUCESSO: SALVA A TRANSAÇÃO E RETORNA OS DADOS
@@ -229,7 +224,7 @@ txRoutes.post('/create', checkAuth, async (req, res) => {
         );
         db.transactions.unshift(novaTx);
         
-        // O Front-end espera qrcodeUrl e copyPaste no corpo da resposta
+        // RETORNA EXATAMENTE O QUE O FRONT-END ESPERA
         res.json({
             qrcodeUrl: data.qrcodeUrl, 
             copyPaste: data.copyPaste,
@@ -256,9 +251,6 @@ txRoutes.post('/withdraw', checkAuth, async (req, res) => {
         return res.status(402).json({ error: 'Saldo insuficiente para saque' });
     }
 
-    console.log(`💸 Solicitando Saque real de R$ ${amount} para ${pixKey} (User: ${user.id})...`);
-    
-    // CAMPOS OBRIGATÓRIOS DA MISTICPAY (Conforme sua documentação)
     const requestBody = {
         amount: amountFloat,
         pixKey: pixKey,
@@ -280,7 +272,7 @@ txRoutes.post('/withdraw', checkAuth, async (req, res) => {
             data = JSON.parse(responseText);
         } catch (e) {
             console.error('❌ MISTICPAY SAQUE NÃO RETORNOU JSON VÁLIDO. TEXTO:', responseText);
-            return res.status(500).json({ error: 'Erro de formatação na API MisticPay Saque. Verifique o log do servidor.', rawResponse: responseText });
+            return res.status(500).json({ error: 'Erro de formatação na API MisticPay Saque.', rawResponse: responseText });
         }
         
         if (!misticResponse.ok) {
@@ -291,10 +283,9 @@ txRoutes.post('/withdraw', checkAuth, async (req, res) => {
             });
         }
         
-        // ✅ SUCESSO: Atualiza o saldo do usuário (realiza o débito)
+        // ✅ SUCESSO
         user.saldoCents -= totalDebit * 100;
         
-        // Salva a transação
         const novaTx = formatarTransacao(
             { ...data, transactionState: 'COMPLETO', amount: amountFloat, transactionId: transactionId, createdAt: new Date().toISOString() }, 
             'RETIRADA', user, getIp(req), description
@@ -371,7 +362,6 @@ app.use('/api/credentials', credRoutes);
 // 👑 ROTAS DO PAINEL ADMIN (GESTÃO DE USUÁRIOS)
 // ==========================================
 
-// Todas as rotas abaixo devem ser protegidas no Admin real.
 app.get('/api/users', checkAuth, (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
     res.json(db.users);
@@ -399,3 +389,4 @@ app.listen(PORT, () => {
     console.log(`🔒 IP ADMIN SEGURO: ${IP_SEGURO_ADMIN}`);
     console.log(`✨ INTEGRAÇÃO MISTICPAY: ATIVA`);
 });
+
