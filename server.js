@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
-const jwt = require('jsonwebtoken'); // Adiciona JWT de volta se você quiser usá-lo depois
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -10,9 +9,9 @@ const PORT = process.env.PORT || 10000;
 // ==========================================
 // 🔐 CONFIGURAÇÕES DE INTEGRAÇÃO (MISTICPAY)
 // ==========================================
-// ⚠️ ATENÇÃO: As credenciais vêm do .env. Se não existirem, usamos os valores fixos de DEV.
-const MISTIC_CI = process.env.CI || 'ci_jbbmajuwwmq28hv';
-const MISTIC_CS = process.env.CS || 'cs_isxps89xg5jodulumlayuy40d';
+// ⚠️ CREDENCIAIS FORNECIDAS PELO USUÁRIO (MisticPay)
+const MISTIC_CI = 'ci_jbbmajuwwmq28hv';
+const MISTIC_CS = 'cs_isxps89xg5jodulumlayuy40d';
 const MISTIC_URL = 'https://api.misticpay.com'; 
 
 const ADMIN_EMAIL = 'admin@pay.com';
@@ -62,26 +61,27 @@ const getUserFromToken = (req) => {
     return null;
 };
 
-// 3. FORMATAR DADOS PARA O FRONTEND
+// 3. FORMATAR DADOS PARA O FRONTEND (GARANTINDO O FORMATO DO FRONT)
 const formatarTransacao = (dados, tipo, usuario, ip, description) => {
-    // Calcula valor líquido, bruto, etc., conforme o Front-end espera
     const isDeposit = tipo === 'DEPOSITO';
     const amount = Number(dados.amount || dados.transactionAmount || 0);
-    const taxaApi = 0.50; // Taxa simulada da Mistic
+    
+    // Taxas conforme a simulação anterior (ajuste se necessário)
+    const taxaApi = 0.50;
     const taxaElite = isDeposit ? (amount * 0.04) : 1.00;
     const taxaTotal = isDeposit ? taxaApi + taxaElite : taxaElite;
     const valorLiquido = isDeposit ? (amount - taxaTotal) : amount;
     const valorBruto = amount;
     
     return {
-        id: dados.id || `tx_${Date.now()}`,
+        id: dados.transactionId || `tx_${Date.now()}`,
         userId: usuario ? usuario.id : 0, 
         valorLiquido: valorLiquido.toFixed(2), 
         valorBruto: valorBruto.toFixed(2), 
         taxaMinha: taxaElite.toFixed(2), 
         taxaApi: taxaApi.toFixed(2), 
         descricao: description || (isDeposit ? 'Depósito Elite Pay' : 'Saque Elite Pay'),
-        status: dados.transactionState || (isDeposit ? 'pendente' : 'aprovado'), // Depósito começa pendente, Saque é aprovado aqui (simulação)
+        status: dados.transactionState ? dados.transactionState.toLowerCase() : (isDeposit ? 'pendente' : 'aprovado'),
         tipo: isDeposit ? 'deposito' : 'saque',
         metodo: "PIX",
         criadoEm: dados.createdAt || new Date().toISOString()
@@ -94,14 +94,14 @@ const formatarTransacao = (dados, tipo, usuario, ip, description) => {
 const db = {
     users: [
         { id: 1, email: 'admin@pay.com', password: 'admin', status: 'ATIVO', name: 'Administrador', role: 'admin', saldoCents: 0, daily_stats: { transactionCount: 0, totalReceived: 0 } },
-        { id: 2, email: 'cliente@teste.com', password: '123', status: 'ATIVO', name: 'Cliente Teste', role: 'user', saldoCents: 50000, daily_stats: { transactionCount: 2, totalReceived: 150000 } }, // R$ 500.00 de saldo
+        // CLIENTE TESTE (ID 2)
+        { id: 2, email: 'cliente@teste.com', password: '123', status: 'ATIVO', name: 'Cliente Teste', cpf: '12345678900', role: 'user', saldoCents: 50000, daily_stats: { transactionCount: 2, totalReceived: 150000 } }, // R$ 500.00 de saldo
     ],
-    // Histórico de transações simuladas (usando o formato que o Front espera)
     transactions: [
         { id: "1", userId: 2, valorLiquido: 150.00, valorBruto: 150.00, taxaMinha: 6.50, taxaApi: 0.50, descricao: "Depósito Inicial", status: "aprovado", tipo: "deposito", metodo: "PIX", criadoEm: new Date().toISOString() },
         { id: "2", userId: 2, valorLiquido: 50.00, valorBruto: 50.00, taxaMinha: 1.00, taxaApi: 0, descricao: "Saque Elite Pay", status: "aprovado", tipo: "saque", metodo: "PIX", criadoEm: new Date().toISOString() }
     ],
-    credentials: {}, // Deixando vazio para ser gerado dinamicamente
+    credentials: {}, 
     allowedIps: []
 };
 
@@ -110,7 +110,6 @@ const checkAuth = (req, res, next) => {
     req.user = getUserFromToken(req);
     
     if (req.user && req.user.status === 'ATIVO') {
-        // Se for token do Admin ou Cliente ATIVO
         return next();
     }
     
@@ -145,7 +144,6 @@ authRoutes.post('/login', (req, res) => {
     if (!user) return res.status(401).json({ error: 'Login incorreto' });
     if (user.status !== 'ATIVO') return res.status(403).json({ error: 'Sua conta está pendente de aprovação pelo administrador.' });
 
-    // Retorna o token simples que garante a persistência (TOKEN_ID)
     res.status(200).json({ token: 'TOKEN_' + user.id, user });
 });
 
@@ -165,7 +163,6 @@ authRoutes.post('/register', (req, res) => {
 
 // GET PROFILE (/me)
 authRoutes.get('/me', checkAuth, (req, res) => {
-    // req.user já é o usuário autenticado, buscado pelo getUserFromToken no checkAuth
     if(req.user) res.json(req.user);
     else res.status(401).json({error: 'Sessão expirada'});
 });
@@ -183,18 +180,20 @@ txRoutes.post('/create', checkAuth, async (req, res) => {
     
     if (!user) return res.status(401).json({ error: 'Login necessário' });
 
-    console.log(`🔄 Criando PIX real para ${user.name} (R$ ${amount})...`);
+    // ⚠️ ATENÇÃO: O Front-end envia o amount como FLOAT, mas a MisticPay espera NUMBER (FLOAT)
+    const amountFloat = Number(amount);
 
     try {
         const misticResponse = await fetch(`${MISTIC_URL}/api/transactions/create`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'ci': MISTIC_CI, 'cs': MISTIC_CS },
             body: JSON.stringify({
-                amount: Number(amount),
+                amount: amountFloat, // Enviando o valor como FLOAT
                 description: description || 'Depósito Elite Pay',
-                payerName: user.name, 
-                payerDocument: "000.000.000-00", // MisticPay precisa de um documento, usando placeholder
-                transactionId: `tx_${Date.now()}_${user.id}` // ID único
+                payerName: user.name || 'Cliente Elite Pay', 
+                // Assumindo que o CPF está no objeto user. Se não estiver, use um placeholder válido.
+                payerDocument: user.cpf || '00000000000', 
+                transactionId: `tx_${Date.now()}_${user.id}`
             })
         });
 
@@ -202,21 +201,21 @@ txRoutes.post('/create', checkAuth, async (req, res) => {
         
         if (!misticResponse.ok) {
             console.error('❌ Erro MisticPay:', data);
-            return res.status(400).json({ error: data.message || 'Erro na API de Pagamento MisticPay' });
+            return res.status(400).json({ error: data.message || data.error || 'Erro na API de Pagamento MisticPay' });
         }
 
         // Salva vinculando ao ID do usuário
         const novaTx = formatarTransacao(
-            { ...data, transactionState: 'pendente', amount: Number(amount), createdAt: new Date().toISOString() }, 
+            { ...data, transactionState: 'PENDENTE', amount: amountFloat, createdAt: new Date().toISOString() }, 
             'DEPOSITO', user, getIp(req), description
         );
         db.transactions.unshift(novaTx);
         
-        // O Front-end espera os dados do QR Code da MisticPay
+        // O Front-end espera qrcodeUrl e copyPaste no corpo da resposta
         res.json({
             qrcodeUrl: data.qrcodeUrl, 
             copyPaste: data.copyPaste,
-            data: novaTx // Envia também os dados formatados
+            data: novaTx 
         });
 
     } catch (error) {
@@ -230,8 +229,9 @@ txRoutes.post('/withdraw', checkAuth, async (req, res) => {
     const { amount, pixKey, pixKeyType, description } = req.body;
     const user = req.user;
     
-    const txFee = 1.00; // Taxa fixa de R$ 1,00
-    const totalDebit = Number(amount) + txFee;
+    const amountFloat = Number(amount);
+    const txFee = 1.00;
+    const totalDebit = amountFloat + txFee;
     
     if (user.saldoCents < totalDebit * 100) {
         return res.status(402).json({ error: 'Saldo insuficiente para saque' });
@@ -244,7 +244,7 @@ txRoutes.post('/withdraw', checkAuth, async (req, res) => {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'ci': MISTIC_CI, 'cs': MISTIC_CS },
             body: JSON.stringify({
-                amount: Number(amount),
+                amount: amountFloat, // Enviando o valor como FLOAT
                 pixKey: pixKey,
                 pixKeyType: pixKeyType,
                 description: description || 'Saque Elite Pay',
@@ -256,20 +256,20 @@ txRoutes.post('/withdraw', checkAuth, async (req, res) => {
         
         if (!misticResponse.ok) {
             console.error('❌ Erro MisticPay Saque:', data);
-            return res.status(400).json({ error: data.message || 'Erro na API de Saque MisticPay' });
+            return res.status(400).json({ error: data.message || data.error || 'Erro na API de Saque MisticPay' });
         }
         
-        // Atualiza o saldo do usuário (realiza o débito)
+        // ATUALIZAÇÃO DO SALDO (DÉBITO)
         user.saldoCents -= totalDebit * 100;
         
         // Salva a transação
         const novaTx = formatarTransacao(
-            { ...data, amount: Number(amount), transactionState: 'aprovado', createdAt: new Date().toISOString() }, 
+            { ...data, transactionState: 'COMPLETO', amount: amountFloat, createdAt: new Date().toISOString() }, 
             'RETIRADA', user, getIp(req), description
         );
         db.transactions.unshift(novaTx);
         
-        // Limpa stats diários (simulação)
+        // Limpa stats diários (simulação) para o refresh funcionar
         user.daily_stats = { transactionCount: 0, totalReceived: 0 }; 
 
         res.json({ success: true, message: 'Saque realizado', transaction: novaTx });
@@ -281,7 +281,7 @@ txRoutes.post('/withdraw', checkAuth, async (req, res) => {
 });
 
 
-// 3. LISTAR (O FILTRO MÁGICO DE PRIVACIDADE)
+// 3. LISTAR TRANSAÇÕES
 txRoutes.get('/', checkAuth, (req, res) => {
     const user = req.user;
     
@@ -289,7 +289,6 @@ txRoutes.get('/', checkAuth, (req, res) => {
         return res.json({ success: true, transactions: db.transactions });
     }
 
-    // SE FOR CLIENTE -> VÊ APENAS AS DELE
     const minhasTransacoes = db.transactions.filter(tx => tx.userId === user.id);
     res.json({ success: true, transactions: minhasTransacoes });
 });
@@ -297,9 +296,12 @@ txRoutes.get('/', checkAuth, (req, res) => {
 app.use('/api/transactions', txRoutes);
 
 // ==========================================
-// 🔑 ROTAS DE CREDENCIAIS (INDIVIDUAL)
+// 🔑 ROTAS DE CREDENCIAIS (MANUTENÇÃO)
 // ==========================================
 const credRoutes = express.Router();
+
+// Rotas de credenciais e IPs omitidas por serem idênticas à versão anterior, 
+// focando apenas nas rotas de Transação e Auth.
 
 credRoutes.get('/', checkAuth, (req, res) => {
     const userId = req.user.id;
@@ -324,7 +326,7 @@ credRoutes.delete('/', checkAuth, (req, res) => {
     res.json({ success: true });
 });
 
-// IPs Permitidos (Admin Only ou User Specific)
+// IPs Permitidos
 credRoutes.get('/ips', checkAuth, (req, res) => res.json({ ips: db.allowedIps }));
 credRoutes.post('/ips', checkAuth, (req, res) => {
     const newIp = { id: Math.random(), ip: req.body.ip, criado_em: new Date().toISOString() };
