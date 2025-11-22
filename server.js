@@ -7,7 +7,7 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 // ==========================================
-// 🔐 CREDENCIAIS E CONFIGURAÇÕES DE SEGURANÇA
+// 🔐 CREDENCIAIS E SEGURANÇA (IP FIXO)
 // ==========================================
 const MISTIC_CI = process.env.CI || 'ci_jbbmajuwwmq28hv'; 
 const MISTIC_CS = process.env.CS || 'cs_isxps89xg5jodulumlayuy40d'; 
@@ -17,30 +17,27 @@ const MISTIC_URL = 'https://api.misticpay.com';
 const ADMIN_EMAIL = 'admin@pay.com';
 const ADMIN_PASS = 'admin';
 
-// 🛑 IP DE SEGURANÇA MÁXIMA (SEU IP)
+// 🛑 IP DE SEGURANÇA (SEU IP REAL)
 const IP_SEGURO_ADMIN = '201.19.113.159'; 
 
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
 app.use(bodyParser.json());
 
 // ==========================================
-// 🛠️ FUNÇÃO DE IP CORRIGIDA (AGORA VAI FUNCIONAR)
+// 🛠️ FUNÇÃO DE DETECÇÃO DE IP (BLINDADA)
 // ==========================================
-
 const getIp = (req) => {
     let ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
     
-    // 1. Se vier como Array (caso raro), pega o primeiro elemento
-    if (Array.isArray(ip)) {
-        ip = ip[0];
-    }
+    // 1. Se vier Array, pega o primeiro
+    if (Array.isArray(ip)) ip = ip[0];
 
-    // 2. Se vier como string com vírgula (O SEU CASO: "201.xx, 172.xx"), corta na vírgula
+    // 2. Se vier lista (ex: "201.19..., 172.71..."), corta na vírgula e pega o REAL
     if (typeof ip === 'string' && ip.includes(',')) {
-        ip = ip.split(',')[0]; // Pega só a primeira parte antes da vírgula
+        ip = ip.split(',')[0]; 
     }
 
-    // 3. Limpa espaços e prefixos IPv6
+    // 3. Limpa espaços e lixo do IPv6
     if (typeof ip === 'string') {
         return ip.trim().replace('::ffff:', '');
     }
@@ -48,48 +45,78 @@ const getIp = (req) => {
     return '';
 };
 
-// 2. Formatar Transação
+// Formatar Transação para o padrão do Painel
 const formatarTransacao = (dados, tipo, usuario, ip, descricaoExtra) => {
     return {
-        id: (db.transactions.length + 1).toString(),
+        id: dados.id || (db.transactions.length + 1).toString(),
         value: Number(dados.amount || dados.transactionAmount || dados.value || 0),
         fee: dados.transactionFee || 0.50,
-        clientName: usuario.name,
+        clientName: usuario ? usuario.name : (dados.clientName || "Cliente Desconhecido"),
         clientDocument: "000.000.000-00",
-        externalId: dados.transactionId || dados.externalId || dados.id || `loc_${Date.now()}`,
+        externalId: dados.transactionId || dados.externalId || `loc_${Date.now()}`,
         description: descricaoExtra || dados.description || (tipo === 'DEPOSITO' ? 'Depósito Elite Pay' : 'Saque Elite Pay'),
         transactionState: dados.transactionState || "PENDENTE",
         transactionMethod: "PIX",
         transactionType: tipo,
         requestIp: ip,
-        userId: usuario.id,
+        userId: usuario ? usuario.id : 0,
         updatedAt: new Date().toISOString(),
         createdAt: dados.createdAt || new Date().toISOString()
     };
 };
 
 // ==========================================
-// 🧪 DADOS INICIAIS
+// 🧪 DADOS INICIAIS (SUGESTÕES DE CLIENTES E TRANSAÇÕES)
 // ==========================================
 
+// Lista rica baseada no seu print para preencher o painel
 const transacoesIniciais = [
     {
-        id: "1", value: 50.00, fee: 0.50, clientName: "Cliente Teste", 
-        description: "Depósito Inicial", externalId: "019506c8-d275...", 
+        id: "019506c8-d275-429", value: 150.00, fee: 0.50, clientName: "Cliente Teste", 
+        description: "Depósito Elite Pay", externalId: "019506c8-d275...", 
         transactionState: "PENDENTE", transactionMethod: "PIX", transactionType: "DEPOSITO", 
         requestIp: "127.0.0.1", userId: 2, createdAt: new Date().toISOString()
     },
     {
-        id: "2", value: 120.00, fee: 1.00, clientName: "Israel Roza Silva", 
+        id: "35e4b3b5-f573-410", value: 500.00, fee: 0.50, clientName: "Cliente Teste", 
+        description: "Depósito Elite Pay", externalId: "35e4b3b5-f573...", 
+        transactionState: "PENDENTE", transactionMethod: "PIX", transactionType: "DEPOSITO", 
+        requestIp: "127.0.0.1", userId: 2, createdAt: new Date(Date.now() - 100000).toISOString()
+    },
+    {
+        id: "c73841b5-c8e3-493", value: 1250.00, fee: 1.00, clientName: "Israel Roza Silva", 
         description: "Saque Elite Pay", externalId: "c73841b5-c8e3...", 
         transactionState: "COMPLETO", transactionMethod: "PIX", transactionType: "RETIRADA", 
-        requestIp: "127.0.0.1", userId: 2, createdAt: new Date(Date.now() - 3600000).toISOString()
+        requestIp: "201.19.113.159", userId: 3, createdAt: new Date(Date.now() - 3600000).toISOString()
+    },
+    {
+        id: "2ddce17e-66a6-489", value: 300.00, fee: 0.50, clientName: "JANISLENE ROSA DE ASSIS", 
+        description: "Depósito Elite Pay", externalId: "2ddce17e-66a6...", 
+        transactionState: "COMPLETO", transactionMethod: "PIX", transactionType: "DEPOSITO", 
+        requestIp: "189.22.10.55", userId: 4, createdAt: new Date(Date.now() - 7200000).toISOString()
+    },
+    {
+        id: "b19b83b9-16d4-473", value: 75.90, fee: 1.00, clientName: "INACIO LENNON MORAES", 
+        description: "Pix mais rápido do Brasil", externalId: "b19b83b9-16d4...", 
+        transactionState: "COMPLETO", transactionMethod: "PIX", transactionType: "RETIRADA", 
+        requestIp: "177.55.20.10", userId: 5, createdAt: new Date(Date.now() - 86400000).toISOString()
+    },
+    {
+        id: "2b3ddfa3-a1a7-485", value: 1000.00, fee: 0.50, clientName: "Israel Roza Silva", 
+        description: "Recebimento via PIX", externalId: "2b3ddfa3-a1a7...", 
+        transactionState: "COMPLETO", transactionMethod: "PIX", transactionType: "DEPOSITO", 
+        requestIp: "201.19.113.159", userId: 3, createdAt: new Date(Date.now() - 90000000).toISOString()
     }
 ];
 
 const db = {
+    // Adicionando usuários fictícios para popular a lista de Clientes
     users: [
         { id: 1, email: 'admin@pay.com', password: 'admin', status: 'ATIVO', name: 'Administrador', role: 'admin', saldoCents: 0 },
+        { id: 2, email: 'cliente@teste.com', password: '123', status: 'ATIVO', name: 'Cliente Teste', role: 'user', saldoCents: 10000 },
+        { id: 3, email: 'israel@email.com', password: '123', status: 'ATIVO', name: 'Israel Roza Silva', role: 'user', saldoCents: 50000 },
+        { id: 4, email: 'janislene@email.com', password: '123', status: 'ATIVO', name: 'JANISLENE ROSA', role: 'user', saldoCents: 25000 },
+        { id: 5, email: 'inacio@email.com', password: '123', status: 'PENDENTE', name: 'INACIO LENNON', role: 'user', saldoCents: 0 },
     ],
     transactions: [...transacoesIniciais],
     credentials: {
@@ -112,33 +139,26 @@ const authRoutes = express.Router();
 authRoutes.post('/login', (req, res) => {
     const { email, password, senha } = req.body;
     const pass = password || senha;
-    
-    // Obtém o IP limpo
     const ipAtual = getIp(req);
 
-    console.log(`📡 LOGIN TENTATIVA | Email: ${email} | IP Detectado: [${ipAtual}]`);
+    console.log(`📡 LOGIN | Email: ${email} | IP: [${ipAtual}]`);
 
-    // --- LÓGICA DE ADMIN ---
+    // --- ADMIN (COM BLOQUEIO IP) ---
     if (email === ADMIN_EMAIL) {
         if (pass !== ADMIN_PASS) return res.status(401).json({ error: 'Senha incorreta' });
         
-        // Compara o IP limpo com o IP seguro
         if (ipAtual !== IP_SEGURO_ADMIN) {
-            console.log(`🚫 ALERTA: IP ${ipAtual} BLOQUEADO (Esperado: ${IP_SEGURO_ADMIN})`);
-            return res.status(403).json({ 
-                error: 'ACESSO NEGADO: IP não autorizado.',
-                seu_ip: ipAtual 
-            });
+            console.log(`🚫 ADMIN BLOQUEADO: IP ${ipAtual} difere de ${IP_SEGURO_ADMIN}`);
+            return res.status(403).json({ error: 'ACESSO NEGADO: IP não autorizado.', seu_ip: ipAtual });
         }
 
-        console.log(`✅ SUCESSO: Admin logado pelo IP ${ipAtual}`);
+        console.log(`✅ ADMIN LIBERADO: IP ${ipAtual}`);
         const adminUser = db.users.find(u => u.email === ADMIN_EMAIL);
         return res.status(200).json({ token: 'ADMIN_TOKEN_SECURE', user: adminUser });
     }
 
     // --- CLIENTES ---
     const user = db.users.find(u => u.email === email && u.password === pass);
-    
     if (!user) return res.status(401).json({ error: 'Login incorreto' });
     if (user.status !== 'ATIVO') return res.status(403).json({ error: 'Conta pendente' });
 
@@ -184,7 +204,6 @@ txRoutes.post('/create', checkAuth, async (req, res) => {
         const novaTx = formatarTransacao({ ...data, transactionState: 'PENDENTE' }, 'DEPOSITO', user, ip, description);
         db.transactions.unshift(novaTx);
         res.json(novaTx);
-
     } catch (e) {
         console.error(e);
         res.status(500).json({ error: 'Erro de conexão' });
@@ -215,7 +234,6 @@ txRoutes.post('/withdraw', checkAuth, async (req, res) => {
         if(!novaTx.transactionState) novaTx.transactionState = "COMPLETO";
         db.transactions.unshift(novaTx);
         res.json(novaTx);
-
     } catch (e) {
         console.error(e);
         res.status(500).json({ error: 'Erro de conexão' });
@@ -223,13 +241,14 @@ txRoutes.post('/withdraw', checkAuth, async (req, res) => {
 });
 
 txRoutes.get('/', checkAuth, (req, res) => {
+    // Retorna a lista completa para preencher a tabela do Dashboard
     res.json({ success: true, transactions: db.transactions });
 });
 
 app.use('/api/transactions', txRoutes);
 
 // ==========================================
-// 🔑 ROTAS AUXILIARES
+// 🔑 ROTAS AUXILIARES E ADMIN
 // ==========================================
 const credRoutes = express.Router();
 credRoutes.get('/', checkAuth, (req, res) => res.json(db.credentials['2'] || { hasCredentials: false }));
@@ -241,7 +260,7 @@ credRoutes.post('/generate', checkAuth, (req, res) => {
 credRoutes.delete('/', checkAuth, (req, res) => { delete db.credentials['2']; res.json({success:true});});
 app.use('/api/credentials', credRoutes);
 
-// Rotas Admin Simples
+// Rotas de Usuários (Para a aba de Clientes)
 app.get('/api/users', (req, res) => res.json(db.users));
 app.put('/api/users/:id/status', (req, res) => {
     const u = db.users.find(x => x.id == req.params.id);
@@ -252,5 +271,6 @@ app.put('/api/users/:id/status', (req, res) => {
 // Inicialização
 app.listen(PORT, () => {
     console.log(`✅ SERVIDOR COMPLETO RODANDO NA PORTA ${PORT}`);
-    console.log(`🔒 SEGURANÇA MÁXIMA ATIVA: IP ${IP_SEGURO_ADMIN}`);
+    console.log(`🔒 SEGURANÇA IP: ATIVA [${IP_SEGURO_ADMIN}]`);
+    console.log(`📊 DADOS: ${db.transactions.length} transações e ${db.users.length} usuários carregados.`);
 });
