@@ -248,22 +248,41 @@ txRoutes.post('/create', checkAuth, async (req, res) => {
     }
 });
 
-// 🔥 NOVO: WEBHOOK PARA RECEBER CONFIRMAÇÃO DE PAGAMENTO
+// 🔥 WEBHOOK COM LOGS DETALHADOS
 txRoutes.post('/webhook', async (req, res) => {
-    console.log('📥 WEBHOOK RECEBIDO DA MISTICPAY:', JSON.stringify(req.body, null, 2));
+    console.log('===========================================');
+    console.log('📥 WEBHOOK RECEBIDO DA MISTICPAY');
+    console.log('===========================================');
+    console.log('🔹 Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('🔹 Body completo:', JSON.stringify(req.body, null, 2));
+    console.log('🔹 Método:', req.method);
+    console.log('🔹 URL:', req.url);
+    console.log('===========================================');
     
-    const { transactionId, transactionState, amount } = req.body;
+    const { transactionId, transactionState, amount, status, state } = req.body;
+    
+    // Tenta pegar o status de diferentes formas
+    const statusFinal = transactionState || status || state;
+    const txId = transactionId || req.body.id;
+    
+    console.log('🔍 Transaction ID extraído:', txId);
+    console.log('🔍 Status extraído:', statusFinal);
     
     // Busca a transação no banco
-    const transaction = db.transactions.find(tx => tx.id === transactionId);
+    const transaction = db.transactions.find(tx => tx.id === txId);
     
     if (!transaction) {
-        console.error('❌ Transação não encontrada:', transactionId);
+        console.error('❌ Transação não encontrada no banco:', txId);
+        console.log('📋 Transações disponíveis:', db.transactions.map(t => t.id));
         return res.status(404).json({ error: 'Transação não encontrada' });
     }
     
+    console.log('✅ Transação encontrada:', transaction);
+    
     // Se o pagamento foi APROVADO/COMPLETO
-    if (transactionState === 'COMPLETE' || transactionState === 'APPROVED' || transactionState === 'PAID') {
+    const statusAprovado = ['COMPLETE', 'APPROVED', 'PAID', 'complete', 'approved', 'paid', 'CONFIRMED', 'confirmed'];
+    
+    if (statusAprovado.includes(statusFinal)) {
         console.log('✅ PAGAMENTO CONFIRMADO! Creditando saldo...');
         
         // Atualiza status da transação
@@ -273,11 +292,19 @@ txRoutes.post('/webhook', async (req, res) => {
         const user = db.users.find(u => u.id === transaction.userId);
         if (user) {
             const valorEmCentavos = Math.round(transaction.valorLiquido * 100);
+            const saldoAnterior = user.saldoCents;
             user.saldoCents += valorEmCentavos;
             
-            console.log(`💰 Saldo creditado: R$ ${transaction.valorLiquido} (${valorEmCentavos} centavos)`);
-            console.log(`💳 Novo saldo de ${user.name}: R$ ${(user.saldoCents / 100).toFixed(2)}`);
+            console.log('💰 Valor líquido da transação: R$', transaction.valorLiquido);
+            console.log('💰 Valor em centavos:', valorEmCentavos);
+            console.log('💳 Saldo anterior:', saldoAnterior, 'centavos (R$', (saldoAnterior/100).toFixed(2), ')');
+            console.log('💳 Novo saldo:', user.saldoCents, 'centavos (R$', (user.saldoCents/100).toFixed(2), ')');
+            console.log('✅ Saldo creditado para:', user.name);
+        } else {
+            console.error('❌ Usuário não encontrado! userId:', transaction.userId);
         }
+    } else {
+        console.log('⏳ Status não é aprovado ainda. Status recebido:', statusFinal);
     }
     
     res.status(200).json({ success: true, message: 'Webhook processado' });
@@ -438,3 +465,4 @@ app.listen(PORT, () => {
     console.log(`✨ INTEGRAÇÃO MISTICPAY: ATIVA`);
     console.log(`📥 WEBHOOK: ${MISTIC_URL}/api/transactions/webhook`);
 });
+
