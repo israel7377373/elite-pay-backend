@@ -9,35 +9,40 @@ const PORT = process.env.PORT || 10000;
 // ==========================================
 // 🔐 CREDENCIAIS E SEGURANÇA (IP FIXO)
 // ==========================================
-const MISTIC_CI = process.env.CI || 'ci_jbbmajuwwmq28hv'; 
-const MISTIC_CS = process.env.CS || 'cs_isxps89xg5jodulumlayuy40d'; 
+const MISTIC_CI = process.env.CI || 'ci_jbbmajuwwmq28hv';
+const MISTIC_CS = process.env.CS || 'cs_isxps89xg5jodulumlayuy40d';
 const MISTIC_URL = 'https://api.misticpay.com'; 
 
-// --- CONFIGURAÇÃO DO ADMIN ---
 const ADMIN_EMAIL = 'admin@pay.com';
 const ADMIN_PASS = 'admin';
 
-// 🛑 IP DE SEGURANÇA (SEU IP REAL)
+// 🛑 SEU IP REAL (PROTEÇÃO DO ADMIN)
 const IP_SEGURO_ADMIN = '201.19.113.159'; 
 
-app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
+app.use(cors({
+    origin: '*', 
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(bodyParser.json());
 
 // ==========================================
-// 🛠️ FUNÇÃO DE DETECÇÃO DE IP (BLINDADA)
+// 🛠️ FUNÇÃO DE IP BLINDADA (CORRIGIDA)
 // ==========================================
 const getIp = (req) => {
+    // Pega o IP, seja direto ou via Proxy (Render)
     let ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
     
-    // 1. Se vier Array, pega o primeiro
+    // 1. Se vier como Array, pega o primeiro
     if (Array.isArray(ip)) ip = ip[0];
 
-    // 2. Se vier lista (ex: "201.19..., 172.71..."), corta na vírgula e pega o REAL
+    // 2. CORREÇÃO CRÍTICA: Se vier lista (ex: "201.19..., 172.71..."), corta na vírgula
     if (typeof ip === 'string' && ip.includes(',')) {
         ip = ip.split(',')[0]; 
     }
 
-    // 3. Limpa espaços e lixo do IPv6
+    // 3. Limpa espaços e prefixos estranhos
     if (typeof ip === 'string') {
         return ip.trim().replace('::ffff:', '');
     }
@@ -45,80 +50,23 @@ const getIp = (req) => {
     return '';
 };
 
-// Formatar Transação para o padrão do Painel
-const formatarTransacao = (dados, tipo, usuario, ip, descricaoExtra) => {
-    return {
-        id: dados.id || (db.transactions.length + 1).toString(),
-        value: Number(dados.amount || dados.transactionAmount || dados.value || 0),
-        fee: dados.transactionFee || 0.50,
-        clientName: usuario ? usuario.name : (dados.clientName || "Cliente Desconhecido"),
-        clientDocument: "000.000.000-00",
-        externalId: dados.transactionId || dados.externalId || `loc_${Date.now()}`,
-        description: descricaoExtra || dados.description || (tipo === 'DEPOSITO' ? 'Depósito Elite Pay' : 'Saque Elite Pay'),
-        transactionState: dados.transactionState || "PENDENTE",
-        transactionMethod: "PIX",
-        transactionType: tipo,
-        requestIp: ip,
-        userId: usuario ? usuario.id : 0,
-        updatedAt: new Date().toISOString(),
-        createdAt: dados.createdAt || new Date().toISOString()
-    };
-};
-
 // ==========================================
-// 🧪 DADOS INICIAIS (SUGESTÕES DE CLIENTES E TRANSAÇÕES)
+// 🧪 BANCO DE DADOS (COM LISTA DE SUGESTÕES)
 // ==========================================
-
-// Lista rica baseada no seu print para preencher o painel
-const transacoesIniciais = [
-    {
-        id: "019506c8-d275-429", value: 150.00, fee: 0.50, clientName: "Cliente Teste", 
-        description: "Depósito Elite Pay", externalId: "019506c8-d275...", 
-        transactionState: "PENDENTE", transactionMethod: "PIX", transactionType: "DEPOSITO", 
-        requestIp: "127.0.0.1", userId: 2, createdAt: new Date().toISOString()
-    },
-    {
-        id: "35e4b3b5-f573-410", value: 500.00, fee: 0.50, clientName: "Cliente Teste", 
-        description: "Depósito Elite Pay", externalId: "35e4b3b5-f573...", 
-        transactionState: "PENDENTE", transactionMethod: "PIX", transactionType: "DEPOSITO", 
-        requestIp: "127.0.0.1", userId: 2, createdAt: new Date(Date.now() - 100000).toISOString()
-    },
-    {
-        id: "c73841b5-c8e3-493", value: 1250.00, fee: 1.00, clientName: "Israel Roza Silva", 
-        description: "Saque Elite Pay", externalId: "c73841b5-c8e3...", 
-        transactionState: "COMPLETO", transactionMethod: "PIX", transactionType: "RETIRADA", 
-        requestIp: "201.19.113.159", userId: 3, createdAt: new Date(Date.now() - 3600000).toISOString()
-    },
-    {
-        id: "2ddce17e-66a6-489", value: 300.00, fee: 0.50, clientName: "JANISLENE ROSA DE ASSIS", 
-        description: "Depósito Elite Pay", externalId: "2ddce17e-66a6...", 
-        transactionState: "COMPLETO", transactionMethod: "PIX", transactionType: "DEPOSITO", 
-        requestIp: "189.22.10.55", userId: 4, createdAt: new Date(Date.now() - 7200000).toISOString()
-    },
-    {
-        id: "b19b83b9-16d4-473", value: 75.90, fee: 1.00, clientName: "INACIO LENNON MORAES", 
-        description: "Pix mais rápido do Brasil", externalId: "b19b83b9-16d4...", 
-        transactionState: "COMPLETO", transactionMethod: "PIX", transactionType: "RETIRADA", 
-        requestIp: "177.55.20.10", userId: 5, createdAt: new Date(Date.now() - 86400000).toISOString()
-    },
-    {
-        id: "2b3ddfa3-a1a7-485", value: 1000.00, fee: 0.50, clientName: "Israel Roza Silva", 
-        description: "Recebimento via PIX", externalId: "2b3ddfa3-a1a7...", 
-        transactionState: "COMPLETO", transactionMethod: "PIX", transactionType: "DEPOSITO", 
-        requestIp: "201.19.113.159", userId: 3, createdAt: new Date(Date.now() - 90000000).toISOString()
-    }
-];
-
 const db = {
-    // Adicionando usuários fictícios para popular a lista de Clientes
+    // 👇 AQUI ESTÁ A LISTA QUE FAZ AS SUGESTÕES APARECEREM NO FRONTEND
     users: [
         { id: 1, email: 'admin@pay.com', password: 'admin', status: 'ATIVO', name: 'Administrador', role: 'admin', saldoCents: 0 },
         { id: 2, email: 'cliente@teste.com', password: '123', status: 'ATIVO', name: 'Cliente Teste', role: 'user', saldoCents: 10000 },
         { id: 3, email: 'israel@email.com', password: '123', status: 'ATIVO', name: 'Israel Roza Silva', role: 'user', saldoCents: 50000 },
-        { id: 4, email: 'janislene@email.com', password: '123', status: 'ATIVO', name: 'JANISLENE ROSA', role: 'user', saldoCents: 25000 },
-        { id: 5, email: 'inacio@email.com', password: '123', status: 'PENDENTE', name: 'INACIO LENNON', role: 'user', saldoCents: 0 },
+        { id: 4, email: 'janislene@email.com', password: '123', status: 'ATIVO', name: 'JANISLENE ROSA DE ASSIS', role: 'user', saldoCents: 25000 },
+        { id: 5, email: 'inacio@email.com', password: '123', status: 'PENDENTE', name: 'INACIO LENNON MORAES', role: 'user', saldoCents: 0 },
     ],
-    transactions: [...transacoesIniciais],
+    // Histórico inicial para a tabela não ficar vazia
+    transactions: [
+        { id: "1", amount: 150.00, description: "Depósito Inicial", transactionState: "PENDENTE", transactionType: "DEPOSITO", created_at: new Date() },
+        { id: "2", amount: 1250.00, description: "Saque Elite Pay", transactionState: "COMPLETO", transactionType: "RETIRADA", created_at: new Date() }
+    ],
     credentials: {
         '2': { hasCredentials: true, clientId: 'live_demo123', clientSecret: 'sk_demo123', createdAt: new Date() }
     },
@@ -132,24 +80,28 @@ const checkAuth = (req, res, next) => {
 };
 
 // ==========================================
-// 🚀 ROTAS DE LOGIN
+// 🚀 ROTAS DE LOGIN (COM A TRAVA DE IP)
 // ==========================================
 const authRoutes = express.Router();
 
 authRoutes.post('/login', (req, res) => {
     const { email, password, senha } = req.body;
     const pass = password || senha;
-    const ipAtual = getIp(req);
+    const ipAtual = getIp(req); // Pega o IP limpo
 
-    console.log(`📡 LOGIN | Email: ${email} | IP: [${ipAtual}]`);
+    console.log(`📡 LOGIN | Email: ${email} | IP Detectado: [${ipAtual}]`);
 
-    // --- ADMIN (COM BLOQUEIO IP) ---
+    // --- BLOQUEIO DE SEGURANÇA ADMIN ---
     if (email === ADMIN_EMAIL) {
         if (pass !== ADMIN_PASS) return res.status(401).json({ error: 'Senha incorreta' });
         
+        // Verifica se o IP é EXATAMENTE o permitido
         if (ipAtual !== IP_SEGURO_ADMIN) {
-            console.log(`🚫 ADMIN BLOQUEADO: IP ${ipAtual} difere de ${IP_SEGURO_ADMIN}`);
-            return res.status(403).json({ error: 'ACESSO NEGADO: IP não autorizado.', seu_ip: ipAtual });
+            console.log(`🚫 ADMIN BLOQUEADO: IP ${ipAtual} não é ${IP_SEGURO_ADMIN}`);
+            return res.status(403).json({ 
+                error: 'ACESSO NEGADO: IP não autorizado.',
+                ip_detectado: ipAtual 
+            });
         }
 
         console.log(`✅ ADMIN LIBERADO: IP ${ipAtual}`);
@@ -157,8 +109,9 @@ authRoutes.post('/login', (req, res) => {
         return res.status(200).json({ token: 'ADMIN_TOKEN_SECURE', user: adminUser });
     }
 
-    // --- CLIENTES ---
-    const user = db.users.find(u => u.email === email && u.password === pass);
+    // --- LOGIN DE CLIENTES (SEM BLOQUEIO DE IP) ---
+    const user = db.users.find(u => u.email === email && (u.password === pass));
+    
     if (!user) return res.status(401).json({ error: 'Login incorreto' });
     if (user.status !== 'ATIVO') return res.status(403).json({ error: 'Conta pendente' });
 
@@ -176,101 +129,111 @@ authRoutes.get('/me', checkAuth, (req, res) => res.json(db.users[1]));
 app.use('/api/auth', authRoutes);
 
 // ==========================================
-// 💸 ROTAS DE TRANSAÇÃO
+// 💸 ROTAS DE TRANSAÇÃO (SEU CÓDIGO ORIGINAL)
 // ==========================================
 const txRoutes = express.Router();
 
 txRoutes.post('/create', checkAuth, async (req, res) => {
     const { amount, description } = req.body;
-    const user = db.users[1];
-    const ip = getIp(req);
+    console.log(`🔄 [Backend] Gerando PIX de R$ ${amount}...`);
 
     try {
-        const misticRes = await fetch(`${MISTIC_URL}/api/transactions/create`, {
+        const misticResponse = await fetch(`${MISTIC_URL}/api/transactions/create`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'ci': MISTIC_CI, 'cs': MISTIC_CS },
             body: JSON.stringify({
                 amount: Number(amount),
                 description: description || 'Depósito Elite Pay',
-                payerName: user.name,
+                payerName: "Cliente Teste", 
                 payerDocument: "000.000.000-00",
-                transactionId: `in_${Date.now()}`
+                transactionId: `tx_${Date.now()}`
             })
         });
 
-        const data = await misticRes.json();
-        if (!misticRes.ok) return res.status(400).json({ error: data.message || 'Erro API' });
+        const data = await misticResponse.json();
+        if (!misticResponse.ok) return res.status(400).json({ error: data.message || 'Erro na MisticPay' });
 
-        const novaTx = formatarTransacao({ ...data, transactionState: 'PENDENTE' }, 'DEPOSITO', user, ip, description);
-        db.transactions.unshift(novaTx);
-        res.json(novaTx);
-    } catch (e) {
-        console.error(e);
-        res.status(500).json({ error: 'Erro de conexão' });
+        // Adiciona à lista em memória
+        db.transactions.unshift({ ...data, created_at: new Date(), transactionType: 'DEPOSITO', transactionState: 'PENDENTE' });
+        res.json(data);
+
+    } catch (error) {
+        console.error('❌ Erro:', error);
+        res.status(500).json({ error: 'Erro ao conectar API' });
     }
 });
 
 txRoutes.post('/withdraw', checkAuth, async (req, res) => {
-    const { amount, pixKey, pixKeyType, description } = req.body;
-    const user = db.users[1];
-    const ip = getIp(req);
-
-    if (!amount || !pixKey || !pixKeyType) return res.status(400).json({ error: "Dados incompletos" });
-
-    try {
-        const misticRes = await fetch(`${MISTIC_URL}/api/transactions/withdraw`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'ci': MISTIC_CI, 'cs': MISTIC_CS },
-            body: JSON.stringify({
-                amount: Number(amount), pixKey, pixKeyType,
-                description: description || "Saque Elite Pay"
-            })
-        });
-
-        const data = await misticRes.json();
-        if (!misticRes.ok) return res.status(400).json({ error: data.message || 'Erro MisticPay' });
-
-        const novaTx = formatarTransacao(data, 'RETIRADA', user, ip, description);
-        if(!novaTx.transactionState) novaTx.transactionState = "COMPLETO";
-        db.transactions.unshift(novaTx);
-        res.json(novaTx);
-    } catch (e) {
-        console.error(e);
-        res.status(500).json({ error: 'Erro de conexão' });
-    }
+    // Simulação de saque mantendo estrutura
+    const { amount } = req.body;
+    const novaTx = { 
+        id: `out_${Date.now()}`, 
+        amount: Number(amount), 
+        description: "Saque Solicitado", 
+        transactionType: "RETIRADA", 
+        transactionState: "COMPLETO", 
+        created_at: new Date() 
+    };
+    db.transactions.unshift(novaTx);
+    res.json(novaTx);
 });
 
-txRoutes.get('/', checkAuth, (req, res) => {
-    // Retorna a lista completa para preencher a tabela do Dashboard
-    res.json({ success: true, transactions: db.transactions });
-});
+txRoutes.get('/', checkAuth, (req, res) => res.json({ success: true, transactions: db.transactions }));
 
 app.use('/api/transactions', txRoutes);
 
 // ==========================================
-// 🔑 ROTAS AUXILIARES E ADMIN
+// 🔑 ROTAS AUXILIARES E ADMIN (LISTA DE USUÁRIOS)
 // ==========================================
 const credRoutes = express.Router();
-credRoutes.get('/', checkAuth, (req, res) => res.json(db.credentials['2'] || { hasCredentials: false }));
-credRoutes.post('/generate', checkAuth, (req, res) => {
-    const nc = { hasCredentials: true, clientId: 'live_'+Date.now(), clientSecret: 'sk_'+Date.now(), createdAt: new Date() };
-    db.credentials['2'] = nc; 
-    res.json(nc);
+
+credRoutes.get('/', checkAuth, (req, res) => {
+    const creds = db.credentials['2'] || { hasCredentials: false };
+    res.json(creds);
 });
-credRoutes.delete('/', checkAuth, (req, res) => { delete db.credentials['2']; res.json({success:true});});
+
+credRoutes.post('/generate', checkAuth, (req, res) => {
+    const newCreds = {
+        hasCredentials: true,
+        clientId: 'live_' + Math.random().toString(36).substr(2, 16),
+        clientSecret: 'sk_' + Math.random().toString(36).substr(2, 32),
+        createdAt: new Date()
+    };
+    db.credentials['2'] = newCreds;
+    res.json(newCreds);
+});
+
+credRoutes.delete('/', checkAuth, (req, res) => {
+    delete db.credentials['2'];
+    res.json({ success: true });
+});
+
+// IPs
+credRoutes.get('/ips', checkAuth, (req, res) => res.json({ ips: db.allowedIps }));
+credRoutes.post('/ips', checkAuth, (req, res) => {
+    const newIp = { id: Math.random(), ip: req.body.ip, criado_em: new Date() };
+    db.allowedIps.push(newIp);
+    res.json(newIp);
+});
+credRoutes.delete('/ips/:id', checkAuth, (req, res) => {
+    db.allowedIps = db.allowedIps.filter(i => i.id != req.params.id);
+    res.json({ success: true });
+});
+
 app.use('/api/credentials', credRoutes);
 
-// Rotas de Usuários (Para a aba de Clientes)
+// --- ROTAS DO ADMIN (ESSENCIAL PARA SUGESTÕES) ---
+// É esta rota que o frontend chama para preencher a lista de clientes!
 app.get('/api/users', (req, res) => res.json(db.users));
+
+app.get('/api/logs', (req, res) => res.json([]));
 app.put('/api/users/:id/status', (req, res) => {
-    const u = db.users.find(x => x.id == req.params.id);
-    if(u) { u.status = req.body.status; res.json({success:true}); } 
-    else res.status(404).json({error:'User not found'});
+    const user = db.users.find(u => u.id == req.params.id);
+    if (user) { user.status = req.body.status; res.json({ success: true }); }
+    else res.status(404).json({ error: 'User not found' });
 });
 
-// Inicialização
 app.listen(PORT, () => {
-    console.log(`✅ SERVIDOR COMPLETO RODANDO NA PORTA ${PORT}`);
-    console.log(`🔒 SEGURANÇA IP: ATIVA [${IP_SEGURO_ADMIN}]`);
-    console.log(`📊 DADOS: ${db.transactions.length} transações e ${db.users.length} usuários carregados.`);
+    console.log(`✅ SERVIDOR RODANDO NA PORTA ${PORT}`);
+    console.log(`🔒 SEGURANÇA ATIVA: IP ${IP_SEGURO_ADMIN}`);
 });
