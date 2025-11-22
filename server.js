@@ -16,7 +16,7 @@ const MISTIC_URL = 'https://api.misticpay.com';
 // Configurações do Admin
 const ADMIN_EMAIL = 'admin@pay.com';
 const ADMIN_PASS = 'admin';
-const IP_SEGURO_ADMIN = '127.0.0.1'; // IP Localhost
+const IP_SEGURO_ADMIN = '201.19.113.159'; // IP web
 const SIMULAR_HACKER = false; // Mude para true para testar bloqueio
 
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
@@ -280,3 +280,4 @@ app.listen(PORT, () => {
     console.log(`✅ SERVIDOR COMPLETO RODANDO NA PORTA ${PORT}`);
     console.log(`🔒 Proteção Admin IP: ATIVADA`);
 });
+
