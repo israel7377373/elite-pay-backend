@@ -161,7 +161,7 @@ app.use('/api/auth', authRoutes);
 // ==========================================
 const txRoutes = express.Router();
 
-// 1. CRIAR PIX (RECEBER)
+// 1. CRIAR PIX (RECEBER) - CORRIGIDO PARA SALVAR AMBOS OS IDs
 txRoutes.post('/create', checkAuth, async (req, res) => {
     const { amount, description } = req.body;
     const user = req.user; 
@@ -230,10 +230,26 @@ txRoutes.post('/create', checkAuth, async (req, res) => {
              });
         }
 
+        // 🔥 CORREÇÃO: Pega o ID retornado pela MisticPay
+        const misticPayId = data.data?.transactionId || data.transactionId;
+
         const novaTx = formatarTransacao(
-            { ...data, transactionState: 'PENDENTE', amount: amountFloat, transactionId: transactionId, createdAt: new Date().toISOString() }, 
+            { 
+                ...data, 
+                transactionState: 'PENDENTE', 
+                amount: amountFloat, 
+                transactionId: transactionId, 
+                createdAt: new Date().toISOString() 
+            }, 
             'DEPOSITO', user, getIp(req), description
         );
+        
+        // 🔥 SALVA AMBOS OS IDs NA TRANSAÇÃO
+        novaTx.misticPayId = misticPayId; // ID da MisticPay
+        novaTx.ourId = transactionId; // Nosso ID interno
+        
+        console.log('💾 IDs salvos - Nosso:', transactionId, '| MisticPay:', misticPayId);
+        
         db.transactions.unshift(novaTx);
         
         res.json({
@@ -248,7 +264,7 @@ txRoutes.post('/create', checkAuth, async (req, res) => {
     }
 });
 
-// 🔥 WEBHOOK COM LOGS DETALHADOS
+// 🔥 WEBHOOK COM LOGS DETALHADOS - BUSCA POR AMBOS OS IDs
 txRoutes.post('/webhook', async (req, res) => {
     console.log('===========================================');
     console.log('📥 WEBHOOK RECEBIDO DA MISTICPAY');
@@ -261,34 +277,36 @@ txRoutes.post('/webhook', async (req, res) => {
     
     const { transactionId, transactionState, amount, status, state } = req.body;
     
-    // Tenta pegar o status de diferentes formas
     const statusFinal = transactionState || status || state;
     const txId = transactionId || req.body.id;
     
     console.log('🔍 Transaction ID extraído:', txId);
     console.log('🔍 Status extraído:', statusFinal);
     
-    // Busca a transação no banco
-    const transaction = db.transactions.find(tx => tx.id === txId);
+    // 🔥 BUSCA POR AMBOS OS IDs (nosso ID OU o ID da MisticPay)
+    const transaction = db.transactions.find(tx => 
+        tx.id === txId || tx.misticPayId === txId || tx.ourId === txId
+    );
     
     if (!transaction) {
         console.error('❌ Transação não encontrada no banco:', txId);
-        console.log('📋 Transações disponíveis:', db.transactions.map(t => t.id));
+        console.log('📋 Transações disponíveis:', db.transactions.map(t => ({
+            id: t.id,
+            misticPayId: t.misticPayId,
+            ourId: t.ourId
+        })));
         return res.status(404).json({ error: 'Transação não encontrada' });
     }
     
     console.log('✅ Transação encontrada:', transaction);
     
-    // Se o pagamento foi APROVADO/COMPLETO
     const statusAprovado = ['COMPLETE', 'APPROVED', 'PAID', 'complete', 'approved', 'paid', 'CONFIRMED', 'confirmed'];
     
     if (statusAprovado.includes(statusFinal)) {
         console.log('✅ PAGAMENTO CONFIRMADO! Creditando saldo...');
         
-        // Atualiza status da transação
         transaction.status = 'aprovado';
         
-        // Credita o saldo LÍQUIDO na conta do usuário
         const user = db.users.find(u => u.id === transaction.userId);
         if (user) {
             const valorEmCentavos = Math.round(transaction.valorLiquido * 100);
