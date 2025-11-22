@@ -264,7 +264,7 @@ txRoutes.post('/create', checkAuth, async (req, res) => {
     }
 });
 
-// 🔥 WEBHOOK COM LOGS DETALHADOS - BUSCA POR AMBOS OS IDs
+// 🔥 WEBHOOK COM LOGS DETALHADOS - ACEITA STATUS EM PORTUGUÊS
 txRoutes.post('/webhook', async (req, res) => {
     console.log('===========================================');
     console.log('📥 WEBHOOK RECEBIDO DA MISTICPAY');
@@ -300,7 +300,13 @@ txRoutes.post('/webhook', async (req, res) => {
     
     console.log('✅ Transação encontrada:', transaction);
     
-    const statusAprovado = ['COMPLETE', 'APPROVED', 'PAID', 'complete', 'approved', 'paid', 'CONFIRMED', 'confirmed'];
+    // 🔥 ACEITA STATUS EM PORTUGUÊS E INGLÊS
+    const statusAprovado = [
+        'COMPLETE', 'APPROVED', 'PAID', 'CONFIRMED', // Inglês
+        'complete', 'approved', 'paid', 'confirmed', // Inglês minúsculo
+        'COMPLETO', 'APROVADO', 'PAGO', 'CONFIRMADO', // Português
+        'completo', 'aprovado', 'pago', 'confirmado'  // Português minúsculo
+    ];
     
     if (statusAprovado.includes(statusFinal)) {
         console.log('✅ PAGAMENTO CONFIRMADO! Creditando saldo...');
