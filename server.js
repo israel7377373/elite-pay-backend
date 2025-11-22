@@ -4,7 +4,7 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
 // ==========================================
 // 🔐 CREDENCIAIS E CONFIGURAÇÕES
@@ -16,7 +16,7 @@ const MISTIC_URL = 'https://api.misticpay.com';
 // Configurações do Admin
 const ADMIN_EMAIL = 'admin@pay.com';
 const ADMIN_PASS = 'admin';
-const IP_SEGURO_ADMIN = '201.19.113.159'; // IP web
+const IP_SEGURO_ADMIN = '127.0.0.1'; // IP Localhost
 const SIMULAR_HACKER = false; // Mude para true para testar bloqueio
 
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
@@ -25,6 +25,13 @@ app.use(bodyParser.json());
 // ==========================================
 // 🛠️ FUNÇÕES AUXILIARES
 // ==========================================
+
+// 1. Pegar IP Real
+function getIp(req) {
+    if (SIMULAR_HACKER) return '192.168.55.99';
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    return (ip === '::1') ? '127.0.0.1' : ip;
+}
 
 // 2. Formatar Transação (ESSENCIAL PARA A TABELA FICAR BONITA)
 // Transforma dados da Mistic ou Mock no formato padrão que o site espera
@@ -273,5 +280,3 @@ app.listen(PORT, () => {
     console.log(`✅ SERVIDOR COMPLETO RODANDO NA PORTA ${PORT}`);
     console.log(`🔒 Proteção Admin IP: ATIVADA`);
 });
-
-
