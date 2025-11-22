@@ -9,14 +9,13 @@ const PORT = process.env.PORT || 10000;
 // ==========================================
 // 🔐 CONFIGURAÇÕES DE INTEGRAÇÃO (MISTICPAY)
 // ==========================================
-// ⚠️ CREDENCIAIS FORNECIDAS PELO USUÁRIO (MisticPay)
 const MISTIC_CI = 'ci_jbbmajuwwmq28hv';
 const MISTIC_CS = 'cs_isxps89xg5jodulumlayuy40d';
 const MISTIC_URL = 'https://api.misticpay.com'; 
 
 const ADMIN_EMAIL = 'admin@pay.com';
 const ADMIN_PASS = 'admin';
-const IP_SEGURO_ADMIN = process.env.ADMIN_IP || '201.19.113.159'; // 🔒 SEU IP REAL
+const IP_SEGURO_ADMIN = process.env.ADMIN_IP || '201.19.113.159';
 
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
 app.use(bodyParser.json());
@@ -61,8 +60,9 @@ const formatarTransacao = (dados, tipo, usuario, ip, description) => {
     const isDeposit = tipo === 'DEPOSITO';
     const amount = Number(dados.amount || dados.transactionAmount || 0);
     
-    const taxaApi = 0.50;
-    const taxaElite = isDeposit ? (amount * 0.04) : 1.00;
+    // 🔥 TAXAS ATUALIZADAS
+    const taxaApi = 1.00; // Taxa MisticPay para depósito
+    const taxaElite = isDeposit ? (amount * 0.04) : 1.00; // 4% Elite ou R$ 1,00 saque
     const taxaTotal = isDeposit ? taxaApi + taxaElite : taxaElite;
     const valorLiquido = isDeposit ? (amount - taxaTotal) : amount;
     const valorBruto = amount;
@@ -70,10 +70,10 @@ const formatarTransacao = (dados, tipo, usuario, ip, description) => {
     return {
         id: dados.transactionId || `tx_${Date.now()}`,
         userId: usuario ? usuario.id : 0, 
-        valorLiquido: valorLiquido.toFixed(2), 
-        valorBruto: valorBruto.toFixed(2), 
-        taxaMinha: taxaElite.toFixed(2), 
-        taxaApi: taxaApi.toFixed(2), 
+        valorLiquido: parseFloat(valorLiquido.toFixed(2)), 
+        valorBruto: parseFloat(valorBruto.toFixed(2)), 
+        taxaMinha: parseFloat(taxaElite.toFixed(2)), 
+        taxaApi: parseFloat(taxaApi.toFixed(2)), 
         descricao: description || (isDeposit ? 'Depósito Elite Pay' : 'Saque Elite Pay'),
         status: dados.transactionState ? dados.transactionState.toLowerCase() : (isDeposit ? 'pendente' : 'aprovado'),
         tipo: isDeposit ? 'deposito' : 'saque',
@@ -91,7 +91,7 @@ const db = {
         { id: 2, email: 'cliente@teste.com', password: '123', status: 'ATIVO', name: 'Cliente Teste', cpf: '00000000000', role: 'user', saldoCents: 50000, daily_stats: { transactionCount: 2, totalReceived: 150000 } },
     ],
     transactions: [
-        { id: "1", userId: 2, valorLiquido: 150.00, valorBruto: 150.00, taxaMinha: 6.50, taxaApi: 0.50, descricao: "Depósito Inicial", status: "aprovado", tipo: "deposito", metodo: "PIX", criadoEm: new Date().toISOString() },
+        { id: "1", userId: 2, valorLiquido: 150.00, valorBruto: 150.00, taxaMinha: 6.50, taxaApi: 1.00, descricao: "Depósito Inicial", status: "aprovado", tipo: "deposito", metodo: "PIX", criadoEm: new Date().toISOString() },
         { id: "2", userId: 2, valorLiquido: 50.00, valorBruto: 50.00, taxaMinha: 1.00, taxaApi: 0, descricao: "Saque Elite Pay", status: "aprovado", tipo: "saque", metodo: "PIX", criadoEm: new Date().toISOString() }
     ],
     credentials: {}, 
@@ -161,7 +161,7 @@ app.use('/api/auth', authRoutes);
 // ==========================================
 const txRoutes = express.Router();
 
-// 1. CRIAR PIX (RECEBER) - FUNÇÃO CORRIGIDA
+// 1. CRIAR PIX (RECEBER)
 txRoutes.post('/create', checkAuth, async (req, res) => {
     const { amount, description } = req.body;
     const user = req.user; 
@@ -248,18 +248,57 @@ txRoutes.post('/create', checkAuth, async (req, res) => {
     }
 });
 
+// 🔥 NOVO: WEBHOOK PARA RECEBER CONFIRMAÇÃO DE PAGAMENTO
+txRoutes.post('/webhook', async (req, res) => {
+    console.log('📥 WEBHOOK RECEBIDO DA MISTICPAY:', JSON.stringify(req.body, null, 2));
+    
+    const { transactionId, transactionState, amount } = req.body;
+    
+    // Busca a transação no banco
+    const transaction = db.transactions.find(tx => tx.id === transactionId);
+    
+    if (!transaction) {
+        console.error('❌ Transação não encontrada:', transactionId);
+        return res.status(404).json({ error: 'Transação não encontrada' });
+    }
+    
+    // Se o pagamento foi APROVADO/COMPLETO
+    if (transactionState === 'COMPLETE' || transactionState === 'APPROVED' || transactionState === 'PAID') {
+        console.log('✅ PAGAMENTO CONFIRMADO! Creditando saldo...');
+        
+        // Atualiza status da transação
+        transaction.status = 'aprovado';
+        
+        // Credita o saldo LÍQUIDO na conta do usuário
+        const user = db.users.find(u => u.id === transaction.userId);
+        if (user) {
+            const valorEmCentavos = Math.round(transaction.valorLiquido * 100);
+            user.saldoCents += valorEmCentavos;
+            
+            console.log(`💰 Saldo creditado: R$ ${transaction.valorLiquido} (${valorEmCentavos} centavos)`);
+            console.log(`💳 Novo saldo de ${user.name}: R$ ${(user.saldoCents / 100).toFixed(2)}`);
+        }
+    }
+    
+    res.status(200).json({ success: true, message: 'Webhook processado' });
+});
+
 // 2. SAQUE (TRANSFERIR)
 txRoutes.post('/withdraw', checkAuth, async (req, res) => {
     const { amount, pixKey, pixKeyType, description } = req.body;
     const user = req.user;
     
     const amountFloat = Number(amount);
-    const txFee = 1.00;
-    const totalDebit = amountFloat + txFee;
+    const txFee = 1.00; // Taxa de R$ 1,00 para saque
+    const totalDebit = amountFloat + txFee; // Total a ser debitado = valor + taxa
     const transactionId = `out_${Date.now()}_${user.id}`;
     
-    if (user.saldoCents < totalDebit * 100) {
-        return res.status(402).json({ error: 'Saldo insuficiente para saque' });
+    // 🔥 VALIDAÇÃO: Verifica se tem saldo suficiente
+    const saldoDisponivel = user.saldoCents / 100;
+    if (saldoDisponivel < totalDebit) {
+        return res.status(402).json({ 
+            error: `Saldo insuficiente. Você tem R$ ${saldoDisponivel.toFixed(2)} e precisa de R$ ${totalDebit.toFixed(2)} (R$ ${amount} + R$ 1,00 de taxa)` 
+        });
     }
 
     const requestBody = {
@@ -294,7 +333,8 @@ txRoutes.post('/withdraw', checkAuth, async (req, res) => {
             });
         }
         
-        user.saldoCents -= totalDebit * 100;
+        // 🔥 DEBITA O VALOR + TAXA DO SALDO
+        user.saldoCents -= Math.round(totalDebit * 100);
         
         const novaTx = formatarTransacao(
             { ...data, transactionState: 'COMPLETO', amount: amountFloat, transactionId: transactionId, createdAt: new Date().toISOString() }, 
@@ -302,9 +342,10 @@ txRoutes.post('/withdraw', checkAuth, async (req, res) => {
         );
         db.transactions.unshift(novaTx);
         
-        user.daily_stats = { transactionCount: 0, totalReceived: 0 }; 
+        console.log(`💸 Saque realizado: R$ ${amount} + R$ 1,00 taxa = R$ ${totalDebit}`);
+        console.log(`💳 Novo saldo de ${user.name}: R$ ${(user.saldoCents / 100).toFixed(2)}`);
 
-        res.json({ success: true, message: 'Saque realizado', transaction: novaTx });
+        res.json({ success: true, message: 'Saque realizado com sucesso', transaction: novaTx });
 
     } catch (error) {
         console.error('❌ Erro de conexão no saque:', error);
@@ -395,4 +436,5 @@ app.listen(PORT, () => {
     console.log(`✅ SERVIDOR ELITE PAY RODANDO NA PORTA ${PORT}`);
     console.log(`🔒 IP ADMIN SEGURO: ${IP_SEGURO_ADMIN}`);
     console.log(`✨ INTEGRAÇÃO MISTICPAY: ATIVA`);
+    console.log(`📥 WEBHOOK: ${MISTIC_URL}/api/transactions/webhook`);
 });
